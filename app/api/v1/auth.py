@@ -6,6 +6,7 @@ from app.config.database import get_db
 from app.core.auth.service import AuthService
 from app.core.auth.schemas import UserLogin, TokenResponse, UserResponse
 from app.shared.database.models import User
+from app.core.auth.dependencies import get_current_user 
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 

@@ -4,7 +4,7 @@ from datetime import datetime
 
 class UserLogin(BaseModel):
     """Schema para login de usuario"""
-    email: EmailStr = Field(..., description="Email del usuario")
+    email: str = Field(..., description="Email del usuario")
     password: str = Field(..., min_length=6, description="Contraseña del usuario")
     
     class Config:
@@ -83,11 +83,11 @@ class ChangePasswordRequest(BaseModel):
 
 class UserCreateRequest(BaseModel):
     """Schema para crear usuario (admin only)"""
-    email: EmailStr
+    email: str = Field(..., description="Email del usuario")
     password: str = Field(..., min_length=6)
     first_name: str = Field(..., min_length=2)
     last_name: str = Field(..., min_length=2)
-    role: str = Field(..., regex="^(vendedor|bodeguero|corredor|administrador|boss)$")
+    role: str = Field(..., pattern="^(vendedor|bodeguero|corredor|administrador|boss)$")
     location_id: Optional[int] = None
     
     class Config:

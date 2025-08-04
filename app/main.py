@@ -34,7 +34,7 @@ app = FastAPI(
 setup_middleware(app)
 
 # Include routers
-app.include_router(api_router)
+app.include_router(api_router, prefix="/api/v1")
 
 # Root endpoint
 @app.get("/")
@@ -47,13 +47,13 @@ async def root():
         "api": "/api/v1"
     }
 
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "version": settings.version,
-        "app": settings.app_name
-    }
+# @app.get("/health")
+# async def health_check():
+#     return {
+#         "status": "healthy",
+#         "version": settings.version,
+#         "app": settings.app_name
+#     }
 
 if __name__ == "__main__":
     import uvicorn
