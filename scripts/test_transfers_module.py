@@ -188,6 +188,112 @@ class TransfersTester:
         
         try:
             response = await self.client.post(
+                f"/transfers/{transfer_id}/accept-courier",
+                json=acceptance_data,
+                headers=self.get_headers("corredor")
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                print(f"✅ Transporte aceptado")
+                print(f"   Nuevo estado: {data['status']}")
+                print(f"   Corredor asignado: {data['courier']['first_name']}")
+            else:
+                print(f"❌ Error aceptando transporte: {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"❌ Excepción CO002: {e}")
+            return False
+        
+        # CO003: Confirmar recolección
+        print("📦 CO003: Confirmando recolección...")
+        pickup_data = {
+            "pickup_notes": "Producto recogido en perfecto estado"
+        }
+        
+        try:
+            response = await self.client.post(
+                f"/transfers/{transfer_id}/confirm-pickup",
+                json=pickup_data,
+                headers=self.get_headers("corredor")
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                print(f"✅ Recolección confirmada")
+                print(f"   Estado: {data['status']}")
+            else:
+                print(f"❌ Error confirmando recolección: {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"❌ Excepción CO003: {e}")
+            return False
+        
+        # CO004: Confirmar entrega
+        print("🎯 CO004: Confirmando entrega...")
+        delivery_data = {
+            "delivery_successful": True,
+            "notes": "Entregado exitosamente al vendedor"
+        }
+        
+        try:
+            response = await self.client.post(
+                f"/transfers/{transfer_id}/confirm-delivery",
+                json=delivery_data,
+                headers=self.get_headers("corredor")
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                print(f"✅ Entrega confirmada")
+                print(f"   Estado: {data['status']}")
+                return True
+            else:
+                print(f"❌ Error confirmando entrega: {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"❌ Excepción CO004: {e}")
+            return False
+    
+    async def test_vendor_reception(self, transfer_id: int):
+        """Probar confirmación de recepción del vendedor (VE008)"""
+        print(f"\n🛍️ Test: Confirmación de recepción vendedor (VE008)")
+        
+        # Verificar entregas pendientes
+        print("📋 Verificando entregas pendientes...")
+        try:
+            response = await self.client.get(
+                "/transfers/pending-receptions",
+                headers=self.get_headers("vendedor")
+            )
+            
+            if response.status_code == 200:
+                pending = response.json()
+                print(f"✅ Entregas pendientes: {len(pending)}")
+                
+                our_transfer = next((t for t in pending if t['id'] == transfer_id), None)
+                if our_transfer:
+                    print(f"✅ Transferencia {transfer_id} pendiente de confirmación")
+                else:
+                    print(f"⚠️ Transferencia {transfer_id} no encontrada en pendientes")
+                    return False
+            else:
+                print(f"❌ Error obteniendo pendientes: {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"❌ Excepción: {e}")
+            return False
+        
+        # VE008: Confirmar recepción
+        print("✅ VE008: Confirmando recepción...")
+        reception_data = {
+            "received_quantity": 1,
+            "condition_ok": True,
+            "notes": "Producto recibido en perfectas condiciones"
+        }
+        
+        try:
+            response = await self.client.post(
                 f"/transfers/{transfer_id}/confirm-reception",
                 json=reception_data,
                 headers=self.get_headers("vendedor")
@@ -414,127 +520,4 @@ if __name__ == "__main__":
     print("   - Existan ubicaciones y productos para testing")
     print()
     
-    asyncio.run(main())id}/accept-courier",
-                json=acceptance_data,
-                headers=self.get_headers("corredor")
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                print(f"✅ Transporte aceptado")
-                print(f"   Nuevo estado: {data['status']}")
-                print(f"   Corredor asignado: {data['courier']['first_name']}")
-            else:
-                print(f"❌ Error aceptando transporte: {response.status_code}")
-                return False
-        except Exception as e:
-            print(f"❌ Excepción CO002: {e}")
-            return False
-        
-        # CO003: Confirmar recolección
-        print("📦 CO003: Confirmando recolección...")
-        pickup_data = {
-            "pickup_notes": "Producto recogido en perfecto estado"
-        }
-        
-        try:
-            response = await self.client.post(
-                f"/transfers/{transfer_id}/confirm-pickup",
-                json=pickup_data,
-                headers=self.get_headers("corredor")
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                print(f"✅ Recolección confirmada")
-                print(f"   Estado: {data['status']}")
-            else:
-                print(f"❌ Error confirmando recolección: {response.status_code}")
-                return False
-        except Exception as e:
-            print(f"❌ Excepción CO003: {e}")
-            return False
-        
-        # CO004: Confirmar entrega
-        print("🎯 CO004: Confirmando entrega...")
-        delivery_data = {
-            "delivery_successful": True,
-            "notes": "Entregado exitosamente al vendedor"
-        }
-        
-        try:
-            response = await self.client.post(
-                f"/transfers/{transfer_id}/confirm-delivery",
-                json=delivery_data,
-                headers=self.get_headers("corredor")
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                print(f"✅ Entrega confirmada")
-                print(f"   Estado: {data['status']}")
-                return True
-            else:
-                print(f"❌ Error confirmando entrega: {response.status_code}")
-                return False
-        except Exception as e:
-            print(f"❌ Excepción CO004: {e}")
-            return False
-    
-    async def test_vendor_reception(self, transfer_id: int):
-        """Probar confirmación de recepción del vendedor (VE008)"""
-        print(f"\n🛍️ Test: Confirmación de recepción vendedor (VE008)")
-        
-        # Verificar entregas pendientes
-        print("📋 Verificando entregas pendientes...")
-        try:
-            response = await self.client.get(
-                "/transfers/pending-receptions",
-                headers=self.get_headers("vendedor")
-            )
-            
-            if response.status_code == 200:
-                pending = response.json()
-                print(f"✅ Entregas pendientes: {len(pending)}")
-                
-                our_transfer = next((t for t in pending if t['id'] == transfer_id), None)
-                if our_transfer:
-                    print(f"✅ Transferencia {transfer_id} pendiente de confirmación")
-                else:
-                    print(f"⚠️ Transferencia {transfer_id} no encontrada en pendientes")
-                    return False
-            else:
-                print(f"❌ Error obteniendo pendientes: {response.status_code}")
-                return False
-        except Exception as e:
-            print(f"❌ Excepción: {e}")
-            return False
-        
-        # VE008: Confirmar recepción
-        print("✅ VE008: Confirmando recepción...")
-        reception_data = {
-            "received_quantity": 1,
-            "condition_ok": True,
-            "notes": "Producto recibido en perfectas condiciones"
-        }
-        
-        try:
-            response = await self.client.post(
-                f"/transfers/{transfer_id}/confirm-reception",
-                json=reception_data,
-                headers=self.get_headers("vendedor")
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                print(f"✅ Recepción confirmada")
-                print(f"   Inventario actualizado: {data.get('inventory_updated', False)}")
-                print(f"   Cantidad recibida: {data.get('received_quantity', 0)}")
-                return True
-            else:
-                print(f"❌ Error confirmando recepción: {response.status_code}")
-                print(f"   Response: {response.text}")
-                return False
-        except Exception as e:
-            print(f"❌ Excepción VE008: {e}")
-            return False
+    asyncio.run(main())
