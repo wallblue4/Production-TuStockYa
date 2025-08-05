@@ -34,7 +34,7 @@ app = FastAPI(
 setup_middleware(app)
 
 # Include routers
-app.include_router(api_router, prefix="/api/v1")
+app.include_router(api_router)
 
 # Root endpoint
 @app.get("/")
