@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  app:
+    environment:
+      DEBUG: "false"
+    volumes: []  # No montar código en producción
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+    
+  db:
+    ports: []  # No exponer puerto en producción
+    
+  redis:
+    ports: []  # No exponer puerto en producción
+    
+  adminer:
+    profiles: ["debug"]  # Solo disponible con profile debug
