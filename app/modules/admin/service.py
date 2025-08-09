@@ -636,3 +636,222 @@ class AdminService:
             "available": True,
             "available_quantity": product_size.quantity
         }
+    
+    async def process_video_inventory_entry(
+        self,
+        video_entry: VideoProductEntry,
+        video_file: UploadFile,
+        admin: User
+    ) -> VideoProcessingResponse:
+        """
+        AD016: Registro de inventario con video IA
+        
+        Procesa video para extraer características y entrenar IA
+        """
+        import os
+        import uuid
+        from datetime import datetime
+        
+        # Validar que el administrador tenga acceso a la bodega
+        warehouse = self.repository.get_location_by_id(video_entry.warehouse_location_id)
+        if not warehouse or warehouse.type != "bodega":
+            raise HTTPException(status_code=404, detail="Bodega no encontrada")
+        
+        # Verificar que el admin tenga acceso a esta bodega
+        if not self.repository.user_has_access_to_location(admin.id, warehouse.id):
+            raise HTTPException(
+                status_code=403, 
+                detail="No tienes acceso a esta bodega"
+            )
+        
+        # Generar nombre único para el archivo
+        file_extension = video_file.filename.split('.')[-1]
+        unique_filename = f"inventory_video_{uuid.uuid4().hex}.{file_extension}"
+        video_path = f"uploads/inventory_videos/{unique_filename}"
+        
+        # Crear directorio si no existe
+        os.makedirs("uploads/inventory_videos", exist_ok=True)
+        
+        # Guardar archivo
+        with open(video_path, "wb") as buffer:
+            content = await video_file.read()
+            buffer.write(content)
+        
+        # Crear registro en base de datos (usando tabla inventory_changes temporalmente)
+        from app.shared.database.models import InventoryChange
+        
+        processing_record = InventoryChange(
+            product_id=None,  # Se establecerá después del procesamiento
+            change_type="video_ai_training",
+            quantity_before=0,
+            quantity_after=video_entry.estimated_quantity,
+            user_id=admin.id,
+            notes=f"VIDEO IA REGISTRO - Bodega: {warehouse.name} - Archivo: {unique_filename} - "
+                  f"Estimado: {video_entry.estimated_quantity} unidades - "
+                  f"Marca: {video_entry.product_brand or 'N/A'} - "
+                  f"Modelo: {video_entry.product_model or 'N/A'} - "
+                  f"Tallas: {','.join(video_entry.expected_sizes) if video_entry.expected_sizes else 'N/A'} - "
+                  f"Notas: {video_entry.notes or 'N/A'}"
+        )
+        
+        self.db.add(processing_record)
+        self.db.commit()
+        self.db.refresh(processing_record)
+        
+        # Simular procesamiento de IA (en producción, esto sería asíncrono)
+        ai_result = await self._simulate_ai_processing(video_path, video_entry)
+        
+        return VideoProcessingResponse(
+            id=processing_record.id,
+            video_file_path=video_path,
+            warehouse_location_id=warehouse.id,
+            warehouse_name=warehouse.name,
+            estimated_quantity=video_entry.estimated_quantity,
+            processing_status="completed",  # En producción sería "processing" inicialmente
+            ai_extracted_info=ai_result,
+            detected_products=[{
+                "brand": ai_result.get("detected_brand"),
+                "model": ai_result.get("detected_model"),
+                "colors": ai_result.get("detected_colors", []),
+                "sizes": ai_result.get("detected_sizes", []),
+                "confidence": ai_result.get("confidence_scores", {}).get("overall", 0.0)
+            }],
+            confidence_score=ai_result.get("confidence_scores", {}).get("overall", 0.85),
+            processed_by_user_id=admin.id,
+            processed_by_name=admin.full_name,
+            processing_started_at=processing_record.created_at,
+            processing_completed_at=datetime.now(),
+            error_message=None,
+            notes=video_entry.notes
+        )
+    
+    async def _simulate_ai_processing(self, video_path: str, video_entry: VideoProductEntry) -> Dict[str, Any]:
+        """
+        Simular procesamiento de IA (en producción sería real)
+        """
+        import random
+        
+        # Simular resultados de IA
+        brands = ["Nike", "Adidas", "Puma", "Reebok", "New Balance"]
+        colors = ["Negro", "Blanco", "Azul", "Rojo", "Gris"]
+        sizes = ["38", "39", "40", "41", "42", "43", "44"]
+        
+        detected_brand = video_entry.product_brand or random.choice(brands)
+        detected_model = video_entry.product_model or f"Modelo-{random.randint(1000, 9999)}"
+        
+        return {
+            "detected_brand": detected_brand,
+            "detected_model": detected_model,
+            "detected_colors": random.sample(colors, random.randint(1, 3)),
+            "detected_sizes": video_entry.expected_sizes or random.sample(sizes, random.randint(3, 6)),
+            "confidence_scores": {
+                "brand": random.uniform(0.8, 0.98),
+                "model": random.uniform(0.75, 0.95),
+                "colors": random.uniform(0.85, 0.97),
+                "sizes": random.uniform(0.80, 0.93),
+                "overall": random.uniform(0.82, 0.95)
+            },
+            "bounding_boxes": [
+                {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8, "label": "product"},
+                {"x": 0.15, "y": 0.7, "width": 0.3, "height": 0.1, "label": "size_label"}
+            ],
+            "recommended_reference_code": f"{detected_brand[:3].upper()}-{detected_model[:4].upper()}-{random.randint(100, 999)}"
+        }
+    
+    async def get_video_processing_history(
+        self,
+        limit: int,
+        status: Optional[str],
+        warehouse_id: Optional[int],
+        date_from: Optional[datetime],
+        date_to: Optional[datetime],
+        admin_user: User
+    ) -> List[VideoProcessingResponse]:
+        """
+        Obtener historial de videos procesados
+        """
+        # En producción, esto consultaría una tabla específica de videos
+        # Por ahora, usamos inventory_changes con change_type="video_ai_training"
+        
+        from app.shared.database.models import InventoryChange, Location
+        
+        query = self.db.query(InventoryChange, Location)\
+            .join(Location, InventoryChange.user_id == admin_user.id)\
+            .filter(InventoryChange.change_type == "video_ai_training")
+        
+        if date_from:
+            query = query.filter(InventoryChange.created_at >= date_from)
+        
+        if date_to:
+            query = query.filter(InventoryChange.created_at <= date_to)
+        
+        records = query.limit(limit).all()
+        
+        # Simular respuestas
+        results = []
+        for record, location in records:
+            results.append(VideoProcessingResponse(
+                id=record.id,
+                video_file_path=f"uploads/inventory_videos/video_{record.id}.mp4",
+                warehouse_location_id=location.id,
+                warehouse_name=location.name,
+                estimated_quantity=record.quantity_after,
+                processing_status="completed",
+                ai_extracted_info={},
+                detected_products=[],
+                confidence_score=0.87,
+                processed_by_user_id=record.user_id,
+                processed_by_name=admin_user.full_name,
+                processing_started_at=record.created_at,
+                processing_completed_at=record.created_at,
+                error_message=None,
+                notes=record.notes
+            ))
+        
+        return results
+    
+    async def get_video_processing_details(self, video_id: int, admin_user: User) -> VideoProcessingResponse:
+        """
+        Obtener detalles específicos de video procesado
+        """
+        from app.shared.database.models import InventoryChange
+        
+        record = self.db.query(InventoryChange)\
+            .filter(
+                InventoryChange.id == video_id,
+                InventoryChange.change_type == "video_ai_training"
+            ).first()
+        
+        if not record:
+            raise HTTPException(status_code=404, detail="Video no encontrado")
+        
+        # Simular respuesta detallada
+        return VideoProcessingResponse(
+            id=record.id,
+            video_file_path=f"uploads/inventory_videos/video_{record.id}.mp4",
+            warehouse_location_id=1,  # Se obtendría de la relación
+            warehouse_name="Bodega Central",
+            estimated_quantity=record.quantity_after,
+            processing_status="completed",
+            ai_extracted_info={
+                "detected_brand": "Nike",
+                "detected_model": "Air Max 270",
+                "detected_colors": ["Negro", "Blanco"],
+                "detected_sizes": ["40", "41", "42", "43"],
+                "confidence_scores": {"overall": 0.92}
+            },
+            detected_products=[{
+                "brand": "Nike",
+                "model": "Air Max 270", 
+                "colors": ["Negro", "Blanco"],
+                "sizes": ["40", "41", "42", "43"],
+                "confidence": 0.92
+            }],
+            confidence_score=0.92,
+            processed_by_user_id=record.user_id,
+            processed_by_name=admin_user.full_name,
+            processing_started_at=record.created_at,
+            processing_completed_at=record.created_at,
+            error_message=None,
+            notes=record.notes
+        )

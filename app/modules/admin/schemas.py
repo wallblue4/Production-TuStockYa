@@ -330,3 +330,42 @@ class DashboardMetrics(BaseModel):
     low_stock_alerts: int
     pending_discount_approvals: int
     avg_performance_score: float
+
+
+class VideoProductEntry(BaseModel):
+    """Entrada de producto mediante video IA"""
+    video_file_path: str = Field(..., description="Ruta del archivo de video")
+    warehouse_location_id: int = Field(..., description="ID de bodega destino")
+    estimated_quantity: int = Field(..., gt=0, description="Cantidad estimada de productos")
+    product_brand: Optional[str] = Field(None, description="Marca del producto (opcional)")
+    product_model: Optional[str] = Field(None, description="Modelo del producto (opcional)")
+    expected_sizes: Optional[List[str]] = Field(None, description="Tallas esperadas")
+    notes: Optional[str] = Field(None, max_length=500, description="Notas adicionales")
+
+class VideoProcessingResponse(BaseModel):
+    """Respuesta del procesamiento de video"""
+    id: int
+    video_file_path: str
+    warehouse_location_id: int
+    warehouse_name: str
+    estimated_quantity: int
+    processing_status: str  # processing, completed, failed
+    ai_extracted_info: Optional[Dict[str, Any]]
+    detected_products: Optional[List[Dict[str, Any]]]
+    confidence_score: Optional[float]
+    processed_by_user_id: int
+    processed_by_name: str
+    processing_started_at: datetime
+    processing_completed_at: Optional[datetime]
+    error_message: Optional[str]
+    notes: Optional[str]
+
+class AIExtractionResult(BaseModel):
+    """Resultado de extracción de IA"""
+    detected_brand: Optional[str]
+    detected_model: Optional[str]
+    detected_colors: List[str]
+    detected_sizes: List[str]
+    confidence_scores: Dict[str, float]
+    bounding_boxes: List[Dict[str, Any]]
+    recommended_reference_code: Optional[str]
