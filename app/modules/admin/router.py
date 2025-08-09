@@ -660,3 +660,118 @@ async def get_system_overview(
             "system_uptime": "99.9%"
         }
     }
+
+@router.post("/inventory/video-entry", response_model=VideoProcessingResponse)
+async def process_video_inventory_entry(
+    warehouse_location_id: int = Form(..., description="ID de bodega destino"),
+    estimated_quantity: int = Form(..., gt=0, description="Cantidad estimada"),
+    product_brand: Optional[str] = Form(None, description="Marca del producto"),
+    product_model: Optional[str] = Form(None, description="Modelo del producto"),
+    expected_sizes: Optional[str] = Form(None, description="Tallas esperadas (separadas por coma)"),
+    notes: Optional[str] = Form(None, description="Notas adicionales"),
+    video_file: UploadFile = File(..., description="Video del producto para IA"),
+    current_user: User = Depends(require_roles(["administrador", "boss"])),
+    db: Session = Depends(get_db)
+):
+    """
+    AD016: Registro de inventario con video IA (MIGRADO DE BG010)
+    
+    **Funcionalidad principal:**
+    - Registro estratégico de inventario por administradores
+    - Procesamiento automático de video con IA
+    - Extracción de características del producto
+    - Entrenamiento automático del sistema de reconocimiento
+    - Asignación automática a bodegas según reglas configuradas
+    
+    **Proceso completo:**
+    1. Administrador graba video del producto desde múltiples ángulos
+    2. Sistema procesa video automáticamente para entrenar IA
+    3. IA extrae: marca, modelo, color, tallas visibles
+    4. Se registra información completa para verificación posterior
+    5. Sistema aplica reglas de distribución configuradas
+    6. Se asignan ubicaciones físicas automáticamente
+    7. IA queda entrenada para reconocer el nuevo producto
+    
+    **Criterios de negocio:**
+    - Solo administradores y boss pueden registrar inventario
+    - Video debe mostrar producto desde múltiples ángulos
+    - Procesamiento debe extraer características automáticamente
+    - Debe asignar bodegas según reglas configuradas
+    - IA debe quedar entrenada inmediatamente
+    - Debe generar ubicación física automática
+    
+    **Requisitos del video:**
+    - Mostrar producto desde múltiples ángulos (mínimo 4 ángulos)
+    - Incluir etiquetas y tallas visibles claramente
+    - Buena iluminación y enfoque nítido
+    - Duración recomendada: 30-90 segundos
+    - Formato: MP4, MOV, AVI (máximo 100MB)
+    """
+    service = AdminService(db)
+    
+    # Validar archivo de video
+    if not video_file.content_type.startswith('video/'):
+        raise HTTPException(status_code=400, detail="Archivo debe ser un video válido")
+    
+    # Validar tamaño (100MB máximo)
+    if video_file.size > 100 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Video no debe superar 100MB")
+    
+    # Procesar tallas esperadas
+    expected_sizes_list = None
+    if expected_sizes:
+        expected_sizes_list = [size.strip() for size in expected_sizes.split(',')]
+    
+    video_entry = VideoProductEntry(
+        video_file_path="",  # Se establecerá en el servicio
+        warehouse_location_id=warehouse_location_id,
+        estimated_quantity=estimated_quantity,
+        product_brand=product_brand,
+        product_model=product_model,
+        expected_sizes=expected_sizes_list,
+        notes=notes
+    )
+    
+    return await service.process_video_inventory_entry(video_entry, video_file, current_user)
+
+@router.get("/inventory/video-entries", response_model=List[VideoProcessingResponse])
+async def get_video_processing_history(
+    limit: int = Query(20, ge=1, le=100, description="Límite de resultados"),
+    status: Optional[str] = Query(None, description="Estado: processing, completed, failed"),
+    warehouse_id: Optional[int] = Query(None, description="Filtrar por bodega"),
+    date_from: Optional[datetime] = Query(None, description="Fecha desde"),
+    date_to: Optional[datetime] = Query(None, description="Fecha hasta"),
+    current_user: User = Depends(require_roles(["administrador", "boss"])),
+    db: Session = Depends(get_db)
+):
+    """
+    Obtener historial de videos procesados para entrenamiento de IA
+    
+    **Funcionalidad:**
+    - Ver historial completo de videos procesados
+    - Filtrar por estado de procesamiento
+    - Filtrar por bodega de destino
+    - Ver resultados de extracción de IA
+    - Seguimiento del entrenamiento del modelo
+    """
+    service = AdminService(db)
+    return await service.get_video_processing_history(
+        limit=limit,
+        status=status,
+        warehouse_id=warehouse_id,
+        date_from=date_from,
+        date_to=date_to,
+        admin_user=current_user
+    )
+
+@router.get("/inventory/video-entries/{video_id}", response_model=VideoProcessingResponse)
+async def get_video_processing_details(
+    video_id: int,
+    current_user: User = Depends(require_roles(["administrador", "boss"])),
+    db: Session = Depends(get_db)
+):
+    """
+    Obtener detalles específicos de un video procesado
+    """
+    service = AdminService(db)
+    return await service.get_video_processing_details(video_id, current_user)

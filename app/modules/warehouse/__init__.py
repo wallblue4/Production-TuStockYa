@@ -1,4 +1,5 @@
-# app/modules/warehouse/__init__.py
+# app/modules/warehouse/__init__.py - ACTUALIZADO
+
 """
 Módulo Warehouse - Funcionalidades del Bodeguero
 
@@ -7,14 +8,17 @@ Este módulo implementa todas las funcionalidades requeridas para el rol de bode
 - BG001: Recibir y procesar solicitudes de productos ✅
 - BG002: Confirmar disponibilidad y preparar productos ✅  
 - BG003: Entregar productos a corredor ✅
-- BG004: Recibir devoluciones de productos
-- BG005: Actualizar ubicaciones de productos entre bodegas/locales
+- BG004: Recibir devoluciones de productos ✅
+- BG005: Actualizar ubicaciones de productos entre bodegas/locales ✅
 - BG006: Consultar inventario disponible por ubicación general ✅
-- BG007: Registrar historial de entregas y recepciones
-- BG008: Gestionar múltiples bodegas asignadas
-- BG009: Reportar discrepancias de inventario
+- BG007: Registrar historial de entregas y recepciones ✅
+- BG008: Gestionar múltiples bodegas asignadas ✅
+- BG009: Reportar discrepancias de inventario ✅
 - BG010: Revertir movimientos de inventario en caso de entrega fallida ✅
-- BG010: Ingreso de nueva mercancía mediante video para entrenamiento de IA
+
+**NOTA:** La funcionalidad de "Ingreso de nueva mercancía mediante video para entrenamiento de IA" 
+fue MIGRADA al módulo Admin como AD016, ya que corresponde a una función estratégica 
+de gestión de inventario que debe ser manejada por administradores.
 
 Arquitectura:
 - router.py: Endpoints FastAPI
