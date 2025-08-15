@@ -22,7 +22,7 @@ services:
       - key: VERSION
         value: 2.0.0
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
-        value: 10080
+        value: 1440
 
 # PostgreSQL Database
 databases:
@@ -30,4 +30,4 @@ databases:
     databaseName: tustockya
     user: tustockya_user
     region: oregon
-    plan: free
+    plan: Basic-256mb
