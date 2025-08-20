@@ -1,0 +1,385 @@
+# Endpoints del módulo admin
+# Tipos de datos de entrada y salida
+
+---
+
+## Usuarios
+
+### POST /admin/users
+Entrada:
+UserCreate {
+  email: EmailStr
+  password: str
+  first_name: str
+  last_name: str
+  role: UserRole (Enum: "vendedor", "bodeguero", "corredor")
+  location_id: Optional[int]
+}
+Salida:
+UserResponse {
+  id: int
+  email: str
+  first_name: str
+  last_name: str
+  full_name: str
+  role: str
+  location_id: Optional[int]
+  location_name: Optional[str]
+  is_active: bool
+  created_at: datetime
+}
+
+### GET /admin/users
+Entrada:
+Query params: role: Optional[UserRole], location_id: Optional[int], is_active: Optional[bool]
+Salida:
+List[UserResponse]
+
+### PUT /admin/users/{user_id}
+Entrada:
+UserUpdate {
+  first_name: Optional[str]
+  last_name: Optional[str]
+  is_active: Optional[bool]
+  location_id: Optional[int]
+}
+Salida:
+UserResponse
+
+### POST /admin/users/assign-location
+Entrada:
+UserAssignment {
+  user_id: int
+  location_id: int
+  role_in_location: Optional[str]
+  start_date: Optional[date]
+  notes: Optional[str]
+}
+Salida:
+Dict: success: bool, user_name: str, location_name: str, assignment_date: date
+
+---
+
+## Ubicaciones
+
+### GET /admin/locations
+Entrada:
+Query param: location_type: Optional[LocationType] ("local", "bodega")
+Salida:
+List[LocationResponse]
+LocationResponse {
+  id: int
+  name: str
+  type: str
+  address: Optional[str]
+  phone: Optional[str]
+  is_active: bool
+  created_at: datetime
+  assigned_users_count: int
+  total_products: int
+  total_inventory_value: Decimal
+}
+
+### GET /admin/locations/{location_id}/stats
+Entrada:
+location_id: int (path), start_date: date (query), end_date: date (query)
+Salida:
+LocationStats {
+  location_id: int
+  location_name: str
+  location_type: str
+  daily_sales: Decimal
+  monthly_sales: Decimal
+  total_products: int
+  low_stock_alerts: int
+  pending_transfers: int
+  active_users: int
+}
+
+---
+
+## Costos
+
+### POST /admin/costs
+Entrada:
+CostConfiguration {
+  location_id: int
+  cost_type: CostType (Enum: "arriendo", "servicios", "nomina", "mercancia", "comisiones", "transporte", "otros")
+  amount: Decimal
+  frequency: str
+  description: str
+  is_active: bool
+  effective_date: date
+}
+Salida:
+CostResponse {
+  id: int
+  location_id: int
+  location_name: str
+  cost_type: str
+  amount: Decimal
+  frequency: str
+  description: str
+  is_active: bool
+  effective_date: date
+  created_by_user_id: int
+  created_by_name: str
+  created_at: datetime
+}
+
+### GET /admin/costs
+Entrada:
+Query params: location_id: Optional[int], cost_type: Optional[CostType]
+Salida:
+List[CostResponse]
+
+---
+
+## Ventas al por mayor
+
+### POST /admin/wholesale-sales
+Entrada:
+WholesaleSaleCreate {
+  customer_name: str
+  customer_document: str
+  customer_phone: Optional[str]
+  location_id: int
+  items: List[Dict[str, Any]]
+  discount_percentage: Optional[Decimal]
+  payment_method: str
+  notes: Optional[str]
+}
+Salida:
+WholesaleSaleResponse {
+  id: int
+  customer_name: str
+  customer_document: str
+  customer_phone: Optional[str]
+  location_id: int
+  location_name: str
+  total_amount: Decimal
+  discount_amount: Decimal
+  final_amount: Decimal
+  payment_method: str
+  sale_date: datetime
+  processed_by_user_id: int
+  processed_by_name: str
+  items_count: int
+  notes: Optional[str]
+}
+
+---
+
+## Reportes
+
+### POST /admin/reports/sales
+Entrada:
+ReportFilter {
+  location_ids: Optional[List[int]]
+  start_date: date
+  end_date: date
+  user_ids: Optional[List[int]]
+  product_categories: Optional[List[str]]
+  sale_type: Optional[SaleType]
+}
+Salida:
+List[SalesReport]
+SalesReport {
+  location_id: int
+  location_name: str
+  period_start: date
+  period_end: date
+  total_sales: Decimal
+  total_transactions: int
+  average_ticket: Decimal
+  top_products: List[Dict[str, Any]]
+  sales_by_day: List[Dict[str, Any]]
+  sales_by_user: List[Dict[str, Any]]
+}
+
+---
+
+## Alertas de inventario
+
+### POST /admin/inventory-alerts
+Entrada:
+InventoryAlert {
+  location_id: int
+  alert_type: AlertType (Enum: "inventario_minimo", "stock_agotado", "producto_vencido")
+  threshold_value: int
+  product_reference: Optional[str]
+  notification_emails: List[EmailStr]
+  is_active: bool
+}
+Salida:
+InventoryAlertResponse {
+  id: int
+  location_id: int
+  location_name: str
+  alert_type: str
+  threshold_value: int
+  product_reference: Optional[str]
+  notification_emails: List[str]
+  is_active: bool
+  created_by_user_id: int
+  created_by_name: str
+  created_at: datetime
+  last_triggered: Optional[datetime]
+}
+
+---
+
+## Descuentos
+
+### GET /admin/discount-requests/pending
+Salida:
+List[DiscountRequestResponse]
+DiscountRequestResponse {
+  id: int
+  sale_id: int
+  requester_user_id: int
+  requester_name: str
+  location_id: int
+  location_name: str
+  original_amount: Decimal
+  discount_amount: Decimal
+  discount_percentage: Decimal
+  reason: str
+  status: str
+  requested_at: datetime
+  approved_by_user_id: Optional[int]
+  approved_by_name: Optional[str]
+  approved_at: Optional[datetime]
+  admin_notes: Optional[str]
+}
+
+### POST /admin/discount-requests/approve
+Entrada:
+DiscountApproval {
+  discount_request_id: int
+  approved: bool
+  admin_notes: Optional[str]
+  max_discount_override: Optional[Decimal]
+}
+Salida:
+DiscountRequestResponse
+
+---
+
+## Transferencias
+
+### GET /admin/transfers/overview
+Salida:
+Dict con resumen de transferencias (ver repository.py)
+
+---
+
+## Performance
+
+### GET /admin/performance/users
+Entrada:
+start_date: date, end_date: date, user_ids: Optional[List[int]], role: Optional[UserRole]
+Salida:
+List[UserPerformance]
+UserPerformance {
+  user_id: int
+  user_name: str
+  role: str
+  location_id: int
+  location_name: str
+  period_start: date
+  period_end: date
+  metrics: Dict[str, Any]
+}
+
+---
+
+## Asignación de modelos
+
+### POST /admin/product-assignments
+Entrada:
+ProductModelAssignment {
+  product_reference: str
+  assigned_warehouses: List[int]
+  distribution_rules: Optional[Dict[str, Any]]
+  priority_warehouse_id: Optional[int]
+  min_stock_per_warehouse: Optional[int]
+  max_stock_per_warehouse: Optional[int]
+}
+Salida:
+ProductModelAssignmentResponse {
+  id: int
+  product_reference: str
+  product_brand: str
+  product_model: str
+  assigned_warehouses: List[Dict[str, Any]]
+  distribution_rules: Optional[Dict[str, Any]]
+  priority_warehouse_id: Optional[int]
+  priority_warehouse_name: Optional[str]
+  min_stock_per_warehouse: Optional[int]
+  max_stock_per_warehouse: Optional[int]
+  assigned_by_user_id: int
+  assigned_by_name: str
+  assigned_at: datetime
+}
+
+---
+
+## Dashboard
+
+### GET /admin/dashboard
+Salida:
+AdminDashboard {
+  admin_name: str
+  managed_locations: List[LocationStats]
+  daily_summary: Dict[str, Any]
+  pending_tasks: Dict[str, int]
+  performance_overview: Dict[str, Any]
+  alerts_summary: Dict[str, int]
+  recent_activities: List[Dict[str, Any]]
+}
+
+### GET /admin/dashboard/metrics
+Salida:
+DashboardMetrics {
+  total_sales_today: Decimal
+  total_sales_month: Decimal
+  active_users: int
+  pending_transfers: int
+  low_stock_alerts: int
+  pending_discount_approvals: int
+  avg_performance_score: float
+}
+
+---
+
+## Inventario por video IA
+
+### POST /admin/inventory/video-entry
+Entrada:
+FormData:
+  warehouse_location_id: int
+  estimated_quantity: int
+  product_brand: Optional[str]
+  product_model: Optional[str]
+  expected_sizes: Optional[str] (coma separada)
+  notes: Optional[str]
+  video_file: UploadFile
+Salida:
+VideoProcessingResponse {
+  id: int
+  video_file_path: str
+  warehouse_location_id: int
+  warehouse_name: str
+  estimated_quantity: int
+  processing_status: str
+  ai_extracted_info: Optional[Dict[str, Any]]
+  detected_products: Optional[List[Dict[str, Any]]]
+  confidence_score: Optional[float]
+  processed_by_user_id: int
+  processed_by_name: str
+  processing_started_at: datetime
+  processing_completed_at: Optional[datetime]
+  error_message: Optional[str]
+  notes: Optional[str]
+}
