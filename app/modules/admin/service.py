@@ -6,6 +6,11 @@ from typing import List, Optional, Dict, Any
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from decimal import Decimal
+from app.shared.services.video_microservice_client import VideoMicroserviceClient
+import uuid
+
+from fastapi import APIRouter, Depends, Query, File, UploadFile, Form
+
 
 from .repository import AdminRepository
 from .schemas import *
@@ -19,6 +24,7 @@ class AdminService:
     def __init__(self, db: Session):
         self.db = db
         self.repository = AdminRepository(db)
+        self.video_client = VideoMicroserviceClient()
     
     # ==================== AD003 & AD004: CREAR USUARIOS ====================
     
@@ -642,88 +648,136 @@ class AdminService:
         video_entry: VideoProductEntry,
         video_file: UploadFile,
         admin: User
-    ) -> VideoProcessingResponse:
+    ) -> Dict[str, Any]:
         """
-        AD016: Registro de inventario con video IA
+        AD016: Registro de inventario con video IA - VERSIÓN MICROSERVICIO
         
-        Procesa video para extraer características y entrenar IA
+        Este método ahora es LIGERO - solo crea job y envía al microservicio
         """
-        import os
-        import uuid
-        from datetime import datetime
         
-        # Validar que el administrador tenga acceso a la bodega
+        # 1. Validaciones rápidas
         warehouse = self.repository.get_location_by_id(video_entry.warehouse_location_id)
         if not warehouse or warehouse.type != "bodega":
             raise HTTPException(status_code=404, detail="Bodega no encontrada")
         
-        # Verificar que el admin tenga acceso a esta bodega
         if not self.repository.user_has_access_to_location(admin.id, warehouse.id):
+            raise HTTPException(status_code=403, detail="No tienes acceso a esta bodega")
+        
+        # Validar tamaño de video
+        max_size = settings.MAX_VIDEO_SIZE_MB * 1024 * 1024
+        if video_file.size > max_size:
             raise HTTPException(
-                status_code=403, 
-                detail="No tienes acceso a esta bodega"
+                status_code=400, 
+                detail=f"Video no debe superar {settings.MAX_VIDEO_SIZE_MB}MB"
             )
         
-        # Generar nombre único para el archivo
-        file_extension = video_file.filename.split('.')[-1]
-        unique_filename = f"inventory_video_{uuid.uuid4().hex}.{file_extension}"
-        video_path = f"uploads/inventory_videos/{unique_filename}"
+        # 2. Crear job de procesamiento
+        job_id = f"video_{uuid.uuid4().hex}"
         
-        # Crear directorio si no existe
-        os.makedirs("uploads/inventory_videos", exist_ok=True)
-        
-        # Guardar archivo
-        with open(video_path, "wb") as buffer:
-            content = await video_file.read()
-            buffer.write(content)
-        
-        # Crear registro en base de datos (usando tabla inventory_changes temporalmente)
-        from app.shared.database.models import InventoryChange
-        
-        processing_record = InventoryChange(
-            product_id=None,  # Se establecerá después del procesamiento
-            change_type="video_ai_training",
-            quantity_before=0,
-            quantity_after=video_entry.estimated_quantity,
-            user_id=admin.id,
-            notes=f"VIDEO IA REGISTRO - Bodega: {warehouse.name} - Archivo: {unique_filename} - "
-                  f"Estimado: {video_entry.estimated_quantity} unidades - "
-                  f"Marca: {video_entry.product_brand or 'N/A'} - "
-                  f"Modelo: {video_entry.product_model or 'N/A'} - "
-                  f"Tallas: {','.join(video_entry.expected_sizes) if video_entry.expected_sizes else 'N/A'} - "
-                  f"Notas: {video_entry.notes or 'N/A'}"
-        )
-        
-        self.db.add(processing_record)
-        self.db.commit()
-        self.db.refresh(processing_record)
-        
-        # Simular procesamiento de IA (en producción, esto sería asíncrono)
-        ai_result = await self._simulate_ai_processing(video_path, video_entry)
-        
-        return VideoProcessingResponse(
-            id=processing_record.id,
-            video_file_path=video_path,
-            warehouse_location_id=warehouse.id,
-            warehouse_name=warehouse.name,
+        from app.shared.database.models import VideoProcessingJob
+        video_job = VideoProcessingJob(
+            job_id=job_id,
+            warehouse_location_id=video_entry.warehouse_location_id,
             estimated_quantity=video_entry.estimated_quantity,
-            processing_status="completed",  # En producción sería "processing" inicialmente
-            ai_extracted_info=ai_result,
-            detected_products=[{
-                "brand": ai_result.get("detected_brand"),
-                "model": ai_result.get("detected_model"),
-                "colors": ai_result.get("detected_colors", []),
-                "sizes": ai_result.get("detected_sizes", []),
-                "confidence": ai_result.get("confidence_scores", {}).get("overall", 0.0)
-            }],
-            confidence_score=ai_result.get("confidence_scores", {}).get("overall", 0.85),
-            processed_by_user_id=admin.id,
-            processed_by_name=admin.full_name,
-            processing_started_at=processing_record.created_at,
-            processing_completed_at=datetime.now(),
-            error_message=None,
-            notes=video_entry.notes
+            product_brand=video_entry.product_brand,
+            product_model=video_entry.product_model,
+            expected_sizes=json.dumps(video_entry.expected_sizes) if video_entry.expected_sizes else None,
+            notes=video_entry.notes,
+            status="submitted",
+            submitted_by_user_id=admin.id
         )
+        
+        self.db.add(video_job)
+        self.db.commit()
+        self.db.refresh(video_job)
+        
+        # 3. Preparar metadata para microservicio
+        metadata = {
+            "job_db_id": video_job.id,
+            "warehouse_id": video_entry.warehouse_location_id,
+            "warehouse_name": warehouse.name,
+            "estimated_quantity": video_entry.estimated_quantity,
+            "admin_id": admin.id,
+            "admin_name": admin.full_name,
+            "expected_brand": video_entry.product_brand,
+            "expected_model": video_entry.product_model,
+            "expected_sizes": video_entry.expected_sizes,
+            "notes": video_entry.notes
+        }
+        
+        try:
+            # 4. Enviar al microservicio (async)
+            microservice_response = await self.video_client.submit_video_for_processing(
+                job_id=video_job.id,
+                video_file=video_file,
+                metadata=metadata
+            )
+            
+            # 5. Actualizar estado
+            video_job.status = "processing"
+            self.db.commit()
+            
+            logger.info(f"✅ Video job {job_id} enviado al microservicio")
+            
+            return {
+                "job_id": video_job.id,
+                "job_uuid": job_id,
+                "status": "processing",
+                "message": "Video enviado para procesamiento. Recibirás notificación al completar.",
+                "estimated_time_minutes": "2-5",
+                "warehouse_name": warehouse.name,
+                "microservice_response": microservice_response
+            }
+            
+        except Exception as e:
+            # Marcar job como fallido
+            video_job.status = "failed"
+            video_job.error_message = str(e)
+            self.db.commit()
+            
+            logger.error(f"❌ Error enviando video job {job_id}: {e}")
+            raise HTTPException(
+                status_code=502, 
+                detail=f"Error procesando video: {str(e)}"
+            )
+    
+    async def get_video_processing_status(self, job_id: int, admin: User) -> Dict[str, Any]:
+        """Consultar estado de procesamiento"""
+        
+        from app.shared.database.models import VideoProcessingJob
+        job = self.db.query(VideoProcessingJob).filter(
+            VideoProcessingJob.id == job_id,
+            VideoProcessingJob.submitted_by_user_id == admin.id
+        ).first()
+        
+        if not job:
+            raise HTTPException(status_code=404, detail="Job no encontrado")
+        
+        # Si está en procesamiento, consultar microservicio
+        if job.status == "processing":
+            try:
+                microservice_status = await self.video_client.get_processing_status(job_id)
+                # Actualizar progreso si cambió
+                if microservice_status.get("progress_percentage") != job.progress_percentage:
+                    job.progress_percentage = microservice_status.get("progress_percentage", 0)
+                    self.db.commit()
+            except:
+                pass  # Si no responde, usar datos locales
+        
+        return {
+            "job_id": job.id,
+            "job_uuid": job.job_id,
+            "status": job.status,
+            "progress_percentage": job.progress_percentage,
+            "warehouse_name": job.warehouse_location.name,
+            "estimated_quantity": job.estimated_quantity,
+            "submitted_at": job.submitted_at,
+            "processing_started_at": job.processing_started_at,
+            "processing_completed_at": job.processing_completed_at,
+            "error_message": job.error_message,
+            "detected_products": json.loads(job.detected_products) if job.detected_products else None,
+            "created_products": json.loads(job.created_products) if job.created_products else None
+        }
     
     async def _simulate_ai_processing(self, video_path: str, video_entry: VideoProductEntry) -> Dict[str, Any]:
         """

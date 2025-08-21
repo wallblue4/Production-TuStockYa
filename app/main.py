@@ -1,3 +1,5 @@
+# app/main.py - ACTUALIZADO
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -14,6 +16,7 @@ async def lifespan(app: FastAPI):
     print(f"🌍 Environment: {'Development' if settings.debug else 'Production'}")
     print(f"🔐 JWT Algorithm: {settings.algorithm}")
     print(f"⏰ Token Expire: {settings.access_token_expire_minutes} minutes")
+    print(f"🗄️  Database: {settings.database_url.split('@')[1] if '@' in settings.database_url else 'localhost'}")
     
     yield
     
@@ -25,7 +28,7 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.version,
     description="Sistema de Gestión de Inventario y Ventas para Calzado Deportivo",
-    docs_url="/docs" if settings.debug else None,
+    docs_url="/docs" if settings.debug else "/docs",  # Mantener docs en producción
     redoc_url="/redoc" if settings.debug else None,
     lifespan=lifespan
 )
@@ -34,7 +37,7 @@ app = FastAPI(
 setup_middleware(app)
 
 # Include routers
-app.include_router(api_router)
+app.include_router(api_router, prefix="/api/v1")
 
 # Root endpoint
 @app.get("/")
@@ -43,17 +46,20 @@ async def root():
         "message": "🚀 TuStockYa API - Sistema de Gestión de Inventario",
         "version": settings.version,
         "status": "running",
-        "docs": "/docs" if settings.debug else "Disabled in production",
+        "environment": "production" if not settings.debug else "development",
+        "docs": "/docs",
         "api": "/api/v1"
     }
 
-# @app.get("/health")
-# async def health_check():
-#     return {
-#         "status": "healthy",
-#         "version": settings.version,
-#         "app": settings.app_name
-#     }
+# Health check para Render
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "version": settings.version,
+        "app": settings.app_name,
+        "environment": "production" if not settings.debug else "development"
+    }
 
 if __name__ == "__main__":
     import uvicorn

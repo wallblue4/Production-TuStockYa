@@ -1,8 +1,9 @@
 # app/modules/admin/router.py
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query , File, UploadFile, Form
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import datetime, date
+
 
 from app.config.database import get_db
 from app.core.auth.dependencies import get_current_user, require_roles
@@ -775,3 +776,74 @@ async def get_video_processing_details(
     """
     service = AdminService(db)
     return await service.get_video_processing_details(video_id, current_user)
+
+# app/modules/admin/router.py - AGREGAR estos endpoints
+
+@router.post("/video-processing-complete")
+async def video_processing_complete_webhook(
+    job_id: int = Form(...),
+    status: str = Form(...),
+    results: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Webhook que recibe notificación del microservicio cuando completa procesamiento
+    """
+    try:
+        logger.info(f"📨 Webhook recibido - Job ID: {job_id}, Status: {status}")
+        
+        # Buscar job en BD
+        from app.shared.database.models import VideoProcessingJob
+        job = db.query(VideoProcessingJob).filter(VideoProcessingJob.id == job_id).first()
+        
+        if not job:
+            logger.error(f"❌ Job {job_id} no encontrado")
+            raise HTTPException(status_code=404, detail="Job no encontrado")
+        
+        # Parsear resultados
+        results_data = json.loads(results)
+        
+        if status == "completed":
+            # Actualizar job
+            job.status = "completed"
+            job.processing_completed_at = datetime.now()
+            job.ai_results = results
+            job.confidence_score = results_data.get("confidence_score", 0.0)
+            job.detected_products = json.dumps(results_data.get("detected_products", []))
+            
+            # Crear productos reales en BD
+            service = AdminService(db)
+            created_products = await service._create_products_from_ai_results(
+                results_data, job
+            )
+            
+            job.created_products = json.dumps([p.id for p in created_products])
+            
+            logger.info(f"✅ Job {job_id} completado - {len(created_products)} productos creados")
+            
+        elif status == "failed":
+            job.status = "failed"
+            job.error_message = results_data.get("error_message", "Error desconocido")
+            job.processing_completed_at = datetime.now()
+            
+            logger.error(f"❌ Job {job_id} falló: {job.error_message}")
+        
+        db.commit()
+        
+        # TODO: Enviar notificación al admin (email, websocket, etc.)
+        
+        return {"status": "success", "message": "Webhook procesado"}
+        
+    except Exception as e:
+        logger.error(f"❌ Error procesando webhook job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/video-jobs/{job_id}/status")
+async def get_video_job_status(
+    job_id: int,
+    current_user: User = Depends(require_roles(["administrador", "boss"])),
+    db: Session = Depends(get_db)
+):
+    """Consultar estado de job de video"""
+    service = AdminService(db)
+    return await service.get_video_processing_status(job_id, current_user)
