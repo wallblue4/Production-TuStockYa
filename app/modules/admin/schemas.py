@@ -41,7 +41,7 @@ class AlertType(str, Enum):
 
 class UserCreate(BaseModel):
     """Crear usuario (vendedor, bodeguero, corredor)"""
-    email: EmailStr = Field(..., description="Email único del usuario")
+    email: str = Field(..., description="Email único del usuario")
     password: str = Field(..., min_length=6, description="Contraseña (mínimo 6 caracteres)")
     first_name: str = Field(..., min_length=2, description="Nombres")
     last_name: str = Field(..., min_length=2, description="Apellidos")
@@ -198,7 +198,7 @@ class InventoryAlert(BaseModel):
     alert_type: AlertType = Field(..., description="Tipo de alerta")
     threshold_value: int = Field(..., gt=0, description="Valor umbral")
     product_reference: Optional[str] = Field(None, description="Producto específico (opcional)")
-    notification_emails: List[EmailStr] = Field(..., description="Emails para notificar")
+    notification_emails: List[str] = Field(..., description="Emails para notificar")
     is_active: bool = Field(default=True, description="Si la alerta está activa")
 
 class InventoryAlertResponse(BaseModel):

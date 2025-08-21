@@ -6,6 +6,9 @@ from app.api.v1.auth import router as auth_router
 from app.modules.sales import sales_router
 from app.modules.transfers.router import router as transfers_router # Importamos el nuevo router de transferencias
 
+from app.modules.admin import admin_router
+
+
 # Crear router principal de la API v1
 api_router = APIRouter()
 
@@ -29,6 +32,13 @@ api_router.include_router(
     prefix="/transfers",  # Prefijo: /api/v1/transfers/...
     tags=["Transfers"]
 )
+
+api_router.include_router(
+    admin_router,
+    prefix="/admin",
+    tags=["Admin - Administrador"]
+)
+
 
 # ==================== ENDPOINTS RAÍZ ACTUALIZADOS ====================
 
@@ -210,3 +220,4 @@ async def test_transfers_module():
             "admin@tustockya.com / admin123"
         ]
     }
+
