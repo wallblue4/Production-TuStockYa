@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Query, File, UploadFile, Form
 
 from .repository import AdminRepository
 from .schemas import *
-from app.shared.database.models import User, Location ,AdminLocationAssignment
+from app.shared.database.models import User, Location ,AdminLocationAssignment , Product
 
 class AdminService:
     """
