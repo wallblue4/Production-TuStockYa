@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # Server - Configuración para Render
     host: str = "0.0.0.0"
     port: int = int(os.getenv("PORT", 10000))
+
+    VIDEO_MICROSERVICE_URL: str = os.getenv("VIDEO_MICROSERVICE_URL", "http://localhost:8000")
+    VIDEO_MICROSERVICE_API_KEY: Optional[str] = None
     
     # SSL para PostgreSQL en producción
     @property
