@@ -36,7 +36,19 @@ class AdminService:
         """
         AD003: Crear usuarios vendedores en locales asignados
         AD004: Crear usuarios bodegueros en bodegas asignadas
+        
+        **VALIDACIÓN AGREGADA:** Solo puede crear usuarios en ubicaciones asignadas
         """
+        
+        # ====== NUEVA VALIDACIÓN: VERIFICAR PERMISOS DE UBICACIÓN ======
+        if user_data.location_id:
+            # Verificar que el administrador puede gestionar esta ubicación
+            can_manage = await self._can_admin_manage_location(admin.id, user_data.location_id)
+            if not can_manage:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"No tienes permisos para crear usuarios en la ubicación {user_data.location_id}"
+                )
         
         # Validar que el email no existe
         existing_user = self.db.query(User)\
@@ -77,6 +89,25 @@ class AdminService:
         
         db_user = self.repository.create_user(user_dict)
         
+        # ====== CREAR ASIGNACIÓN AUTOMÁTICA EN UserLocationAssignment ======
+        if user_data.location_id:
+            try:
+                assignment = UserLocationAssignment(
+                    user_id=db_user.id,
+                    location_id=user_data.location_id,
+                    role_at_location=user_data.role.value,
+                    is_active=True
+                )
+                self.db.add(assignment)
+                self.db.commit()
+            except Exception as e:
+                # Si falla la asignación, rollback del usuario creado
+                self.db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Error creando asignación de usuario"
+                )
+        
         return UserResponse(
             id=db_user.id,
             email=db_user.email,
@@ -89,8 +120,178 @@ class AdminService:
             is_active=db_user.is_active,
             created_at=db_user.created_at
         )
+
     
     # ==================== AD005 & AD006: ASIGNAR USUARIOS ====================
+
+    async def _can_admin_manage_location(self, admin_id: int, location_id: int) -> bool:
+        """Verificar si un administrador puede gestionar una ubicación específica"""
+        
+        # BOSS puede gestionar cualquier ubicación
+        admin = self.db.query(User).filter(User.id == admin_id).first()
+        if admin and admin.role == "boss":
+            return True
+        
+        # Para administradores, verificar asignación específica
+        assignment = self.db.query(AdminLocationAssignment)\
+            .filter(
+                AdminLocationAssignment.admin_id == admin_id,
+                AdminLocationAssignment.location_id == location_id,
+                AdminLocationAssignment.is_active == True
+            ).first()
+        
+        return assignment is not None
+
+    async def assign_admin_to_locations(
+        self, 
+        assignment_data: AdminLocationAssignmentCreate,
+        boss: User
+    ) -> AdminLocationAssignmentResponse:
+        """
+        Asignar administrador a una ubicación específica
+        Solo el BOSS puede hacer esto
+        """
+        
+        # Validar que el usuario a asignar es administrador
+        admin_user = self.db.query(User).filter(User.id == assignment_data.admin_id).first()
+        if not admin_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Administrador no encontrado"
+            )
+        
+        if admin_user.role != "administrador":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El usuario debe tener rol de administrador"
+            )
+        
+        # Validar que la ubicación existe
+        location = self.db.query(Location).filter(Location.id == assignment_data.location_id).first()
+        if not location:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Ubicación no encontrada"
+            )
+        
+        # Crear asignación
+        assignment_dict = assignment_data.dict()
+        assignment_dict["assigned_by_user_id"] = boss.id
+        
+        db_assignment = self.repository.create_admin_assignment(assignment_dict)
+        
+        return AdminLocationAssignmentResponse(
+            id=db_assignment.id,
+            admin_id=db_assignment.admin_id,
+            admin_name=admin_user.full_name,
+            location_id=db_assignment.location_id,
+            location_name=location.name,
+            location_type=location.type,
+            is_active=db_assignment.is_active,
+            assigned_at=db_assignment.assigned_at,
+            assigned_by_name=boss.full_name,
+            notes=db_assignment.notes
+        )
+    
+    async def assign_admin_to_multiple_locations(
+        self,
+        bulk_assignment: AdminLocationAssignmentBulk,
+        boss: User
+    ) -> List[AdminLocationAssignmentResponse]:
+        """
+        Asignar administrador a múltiples ubicaciones
+        """
+        
+        results = []
+        
+        for location_id in bulk_assignment.location_ids:
+            assignment_data = AdminLocationAssignmentCreate(
+                admin_id=bulk_assignment.admin_id,
+                location_id=location_id,
+                notes=bulk_assignment.notes
+            )
+            
+            try:
+                result = await self.assign_admin_to_locations(assignment_data, boss)
+                results.append(result)
+            except HTTPException as e:
+                # Continuar con las otras ubicaciones si una falla
+                continue
+        
+        return results
+    
+    async def get_admin_assignments(self, admin: User) -> List[AdminLocationAssignmentResponse]:
+        """
+        Obtener asignaciones de ubicaciones del administrador actual
+        """
+        
+        assignments = self.repository.get_admin_assignments(admin.id)
+        
+        return [
+            AdminLocationAssignmentResponse(
+                id=assignment.id,
+                admin_id=assignment.admin_id,
+                admin_name=admin.full_name,
+                location_id=assignment.location_id,
+                location_name=assignment.location.name,
+                location_type=assignment.location.type,
+                is_active=assignment.is_active,
+                assigned_at=assignment.assigned_at,
+                assigned_by_name=assignment.assigned_by.full_name if assignment.assigned_by else None,
+                notes=assignment.notes
+            ) for assignment in assignments
+        ]
+    
+    async def remove_admin_assignment(
+        self,
+        admin_id: int,
+        location_id: int,
+        boss: User
+    ) -> Dict[str, Any]:
+        """
+        Remover asignación de administrador a ubicación
+        """
+        
+        success = self.repository.remove_admin_assignment(admin_id, location_id)
+        
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Asignación no encontrada"
+            )
+        
+        return {
+            "success": True,
+            "message": "Asignación removida correctamente",
+            "removed_by": boss.full_name,
+            "removed_at": datetime.now()
+        }
+    
+    async def get_all_admin_assignments(self, boss: User) -> List[AdminLocationAssignmentResponse]:
+        """
+        Ver todas las asignaciones de administradores (solo para BOSS)
+        """
+        
+        assignments = self.db.query(AdminLocationAssignment)\
+            .filter(AdminLocationAssignment.is_active == True)\
+            .join(User, AdminLocationAssignment.admin_id == User.id)\
+            .join(Location, AdminLocationAssignment.location_id == Location.id)\
+            .all()
+        
+        return [
+            AdminLocationAssignmentResponse(
+                id=assignment.id,
+                admin_id=assignment.admin_id,
+                admin_name=assignment.admin.full_name,
+                location_id=assignment.location_id,
+                location_name=assignment.location.name,
+                location_type=assignment.location.type,
+                is_active=assignment.is_active,
+                assigned_at=assignment.assigned_at,
+                assigned_by_name=assignment.assigned_by.full_name if assignment.assigned_by else None,
+                notes=assignment.notes
+            ) for assignment in assignments
+        ]
     
     async def assign_user_to_location(
         self, 

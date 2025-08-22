@@ -369,3 +369,29 @@ class AIExtractionResult(BaseModel):
     confidence_scores: Dict[str, float]
     bounding_boxes: List[Dict[str, Any]]
     recommended_reference_code: Optional[str]
+
+
+class AdminLocationAssignmentCreate(BaseModel):
+    """Crear asignación de administrador a ubicación"""
+    admin_id: int = Field(..., description="ID del administrador")
+    location_id: int = Field(..., description="ID de la ubicación")
+    notes: Optional[str] = Field(None, description="Notas adicionales")
+
+class AdminLocationAssignmentResponse(BaseModel):
+    """Respuesta de asignación creada"""
+    id: int
+    admin_id: int
+    admin_name: str
+    location_id: int
+    location_name: str
+    location_type: str
+    is_active: bool
+    assigned_at: datetime
+    assigned_by_name: Optional[str]
+    notes: Optional[str]
+
+class AdminLocationAssignmentBulk(BaseModel):
+    """Asignación múltiple de administrador a ubicaciones"""
+    admin_id: int = Field(..., description="ID del administrador")
+    location_ids: List[int] = Field(..., description="IDs de las ubicaciones")
+    notes: Optional[str] = Field(None, description="Notas para todas las asignaciones")

@@ -307,6 +307,29 @@ class UserLocationAssignment(Base):
     user = relationship("User", back_populates="location_assignments")
     location = relationship("Location")
 
+
+class AdminLocationAssignment(Base):
+    """Modelo de Asignación de Administradores a Ubicaciones"""
+    __tablename__ = "admin_location_assignments"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    admin_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    location_id = Column(Integer, ForeignKey("locations.id"), nullable=False)
+    is_active = Column(Boolean, default=True)
+    assigned_at = Column(DateTime, server_default=func.current_timestamp())
+    assigned_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # Quién hizo la asignación
+    notes = Column(Text, nullable=True)
+    
+    # Constraint para evitar duplicados
+    __table_args__ = (
+        UniqueConstraint('admin_id', 'location_id', name='admin_location_unique'),
+    )
+    
+    # Relationships
+    admin = relationship("User", foreign_keys=[admin_id])
+    location = relationship("Location")
+    assigned_by = relationship("User", foreign_keys=[assigned_by_user_id])
+
 class ReturnRequest(Base):
     """Modelo de Solicitudes de Devolución - EXACTO A BD"""
     __tablename__ = "return_requests"
