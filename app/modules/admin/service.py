@@ -36,13 +36,10 @@ class AdminService:
         """
         AD003: Crear usuarios vendedores en locales asignados
         AD004: Crear usuarios bodegueros en bodegas asignadas
-        
-        **VALIDACIÓN AGREGADA:** Solo puede crear usuarios en ubicaciones asignadas
         """
         
-        # ====== NUEVA VALIDACIÓN: VERIFICAR PERMISOS DE UBICACIÓN ======
+        # ====== VALIDACIÓN: VERIFICAR PERMISOS DE UBICACIÓN ======
         if user_data.location_id:
-            # Verificar que el administrador puede gestionar esta ubicación
             can_manage = await self._can_admin_manage_location(admin.id, user_data.location_id)
             if not can_manage:
                 raise HTTPException(
@@ -83,15 +80,28 @@ class AdminService:
                     detail="Bodegueros deben asignarse a bodegas"
                 )
         
-        # Crear usuario
-        user_dict = user_data.dict()
-        user_dict["email"] = user_dict["email"].lower()
-        
-        db_user = self.repository.create_user(user_dict)
-        
-        # ====== CREAR ASIGNACIÓN AUTOMÁTICA EN UserLocationAssignment ======
-        if user_data.location_id:
-            try:
+        # ====== TRANSACCIÓN ÚNICA PARA CREAR USUARIO Y ASIGNACIÓN ======
+        try:
+            # 1. Crear usuario (SIN COMMIT AÚN)
+            user_dict = user_data.dict()
+            user_dict["email"] = user_dict["email"].lower()
+            
+            # Hashear password
+            from passlib.context import CryptContext
+            pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+            
+            hashed_password = pwd_context.hash(user_dict["password"])
+            user_dict["password_hash"] = hashed_password
+            del user_dict["password"]
+            
+            db_user = User(**user_dict)
+            self.db.add(db_user)
+            self.db.flush()  # Obtener ID sin hacer commit aún
+            
+            # 2. Crear asignación en UserLocationAssignment si se especifica ubicación
+            if user_data.location_id:
+                from app.shared.database.models import UserLocationAssignment
+                
                 assignment = UserLocationAssignment(
                     user_id=db_user.id,
                     location_id=user_data.location_id,
@@ -99,27 +109,35 @@ class AdminService:
                     is_active=True
                 )
                 self.db.add(assignment)
-                self.db.commit()
-            except Exception as e:
-                # Si falla la asignación, rollback del usuario creado
-                self.db.rollback()
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Error creando asignación de usuario"
-                )
-        
-        return UserResponse(
-            id=db_user.id,
-            email=db_user.email,
-            first_name=db_user.first_name,
-            last_name=db_user.last_name,
-            full_name=db_user.full_name,
-            role=db_user.role,
-            location_id=db_user.location_id,
-            location_name=db_user.location.name if db_user.location else None,
-            is_active=db_user.is_active,
-            created_at=db_user.created_at
-        )
+            
+            # 3. Commit de toda la transacción
+            self.db.commit()
+            self.db.refresh(db_user)
+            
+            return UserResponse(
+                id=db_user.id,
+                email=db_user.email,
+                first_name=db_user.first_name,
+                last_name=db_user.last_name,
+                full_name=db_user.full_name,
+                role=db_user.role,
+                location_id=db_user.location_id,
+                location_name=db_user.location.name if db_user.location else None,
+                is_active=db_user.is_active,
+                created_at=db_user.created_at
+            )
+            
+        except Exception as e:
+            # Rollback de toda la transacción si algo falla
+            self.db.rollback()
+            
+            # Log del error específico
+            print(f"Error detallado creando usuario: {e}")
+            
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error creando usuario y asignación: {str(e)}"
+            )
 
     
     # ==================== AD005 & AD006: ASIGNAR USUARIOS ====================
