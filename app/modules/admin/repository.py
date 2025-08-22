@@ -8,7 +8,7 @@ from decimal import Decimal
 from app.shared.database.models import (
     User, Location, Sale, SaleItem, Product, ProductSize,
     DiscountRequest, TransferRequest, Expense, UserLocationAssignment,
-    InventoryChange
+    InventoryChange , AdminLocationAssignment
 )
 
 class AdminRepository:
@@ -28,7 +28,7 @@ class AdminRepository:
         pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
         
         hashed_password = pwd_context.hash(user_data["password"])
-        user_data["password_hash"] = hashed_password
+        user_data["password_hash"] = hashed_password 
         del user_data["password"]
         
         db_user = User(**user_data)
@@ -37,14 +37,6 @@ class AdminRepository:
         self.db.refresh(db_user)
         return db_user
     
-    def get_users_by_admin(self, admin_id: int) -> List[User]:
-        """Obtener usuarios gestionados por un administrador"""
-        # En producción, esto se basaría en UserLocationAssignment
-        return self.db.query(User)\
-            .filter(User.role.in_(["vendedor", "bodeguero", "corredor"]))\
-            .filter(User.is_active == True)\
-            .order_by(User.created_at.desc())\
-            .all()
     
     def update_user(self, user_id: int, update_data: dict) -> Optional[User]:
         """Actualizar usuario"""
@@ -56,6 +48,113 @@ class AdminRepository:
             self.db.commit()
             self.db.refresh(user)
         return user
+
+    def create_admin_assignment(self, assignment_data: dict) -> AdminLocationAssignment:
+        """Crear asignación de administrador a ubicación"""
+        
+        # Verificar si ya existe la asignación
+        existing = self.db.query(AdminLocationAssignment)\
+            .filter(
+                AdminLocationAssignment.admin_id == assignment_data["admin_id"],
+                AdminLocationAssignment.location_id == assignment_data["location_id"]
+            ).first()
+        
+        if existing:
+            # Reactivar si existe pero está inactiva
+            existing.is_active = True
+            existing.assigned_at = func.current_timestamp()
+            existing.assigned_by_user_id = assignment_data.get("assigned_by_user_id")
+            existing.notes = assignment_data.get("notes")
+            self.db.commit()
+            self.db.refresh(existing)
+            return existing
+        
+        # Crear nueva asignación
+        assignment = AdminLocationAssignment(**assignment_data)
+        self.db.add(assignment)
+        self.db.commit()
+        self.db.refresh(assignment)
+        return assignment
+    
+    def get_admin_assignments(self, admin_id: int) -> List[AdminLocationAssignment]:
+        """Obtener asignaciones de un administrador"""
+        return self.db.query(AdminLocationAssignment)\
+            .filter(
+                AdminLocationAssignment.admin_id == admin_id,
+                AdminLocationAssignment.is_active == True
+            )\
+            .join(Location, AdminLocationAssignment.location_id == Location.id)\
+            .filter(Location.is_active == True)\
+            .all()
+    
+    def remove_admin_assignment(self, admin_id: int, location_id: int) -> bool:
+        """Remover asignación de administrador"""
+        assignment = self.db.query(AdminLocationAssignment)\
+            .filter(
+                AdminLocationAssignment.admin_id == admin_id,
+                AdminLocationAssignment.location_id == location_id
+            ).first()
+        
+        if assignment:
+            assignment.is_active = False
+            self.db.commit()
+            return True
+        return False
+    
+    # ==================== MÉTODOS CORREGIDOS ====================
+    
+    def get_managed_locations(self, admin_id: int) -> List[Location]:
+        """Obtener ubicaciones gestionadas por el administrador - CORREGIDO"""
+        
+        # Si es BOSS, puede ver todas las ubicaciones
+        admin = self.db.query(User).filter(User.id == admin_id).first()
+        if admin and admin.role == "boss":
+            return self.db.query(Location)\
+                .filter(Location.is_active == True)\
+                .order_by(Location.name)\
+                .all()
+        
+        # Para administradores, solo ubicaciones asignadas
+        return self.db.query(Location)\
+            .join(AdminLocationAssignment, Location.id == AdminLocationAssignment.location_id)\
+            .filter(
+                AdminLocationAssignment.admin_id == admin_id,
+                AdminLocationAssignment.is_active == True,
+                Location.is_active == True
+            )\
+            .order_by(Location.name)\
+            .all()
+    
+    def get_users_by_admin(self, admin_id: int) -> List[User]:
+        """Obtener usuarios gestionados por un administrador - CORREGIDO"""
+        
+        # Si es BOSS, puede ver todos los usuarios
+        admin = self.db.query(User).filter(User.id == admin_id).first()
+        if admin and admin.role == "boss":
+            return self.db.query(User)\
+                .filter(User.role.in_(["vendedor", "bodeguero", "corredor", "administrador"]))\
+                .filter(User.is_active == True)\
+                .order_by(User.created_at.desc())\
+                .all()
+        
+        # Para administradores, solo usuarios en ubicaciones asignadas
+        managed_location_ids = self.db.query(AdminLocationAssignment.location_id)\
+            .filter(
+                AdminLocationAssignment.admin_id == admin_id,
+                AdminLocationAssignment.is_active == True
+            ).subquery()
+        
+        return self.db.query(User)\
+            .join(UserLocationAssignment, User.id == UserLocationAssignment.user_id)\
+            .filter(
+                UserLocationAssignment.location_id.in_(managed_location_ids),
+                UserLocationAssignment.is_active == True,
+                User.role.in_(["vendedor", "bodeguero", "corredor"]),
+                User.is_active == True
+            )\
+            .distinct()\
+            .order_by(User.created_at.desc())\
+            .all()
     
     def assign_user_to_location(self, assignment_data: dict) -> Dict[str, Any]:
         """Asignar usuario a ubicación"""
@@ -94,13 +193,6 @@ class AdminRepository:
     
     # ==================== GESTIÓN DE UBICACIONES ====================
     
-    def get_managed_locations(self, admin_id: int) -> List[Location]:
-        """Obtener ubicaciones gestionadas por el administrador"""
-        # En producción, esto se basaría en asignaciones específicas
-        return self.db.query(Location)\
-            .filter(Location.is_active == True)\
-            .order_by(Location.name)\
-            .all()
     
     def get_location_stats(self, location_id: int, start_date: date, end_date: date) -> Dict[str, Any]:
         """Obtener estadísticas de una ubicación"""

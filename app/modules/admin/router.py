@@ -50,9 +50,26 @@ async def get_managed_users(
 ):
     """
     Obtener usuarios gestionados por el administrador
+    
+    **FUNCIONALIDAD ACTUALIZADA:**
+    - Administradores ven solo usuarios en sus ubicaciones asignadas
+    - BOSS ve todos los usuarios
+    - Filtros aplicados después de la validación de permisos
     """
     service = AdminService(db)
+    
+    # ====== USAR MÉTODO CORREGIDO QUE RESPETA ASIGNACIONES ======
     users = service.repository.get_users_by_admin(current_user.id)
+    
+    # ====== VALIDACIÓN ADICIONAL DE FILTRO POR UBICACIÓN ======
+    if location_id and current_user.role != "boss":
+        # Verificar que el admin puede ver esa ubicación
+        can_manage = await service._can_admin_manage_location(current_user.id, location_id)
+        if not can_manage:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"No tienes permisos para ver usuarios de la ubicación {location_id}"
+            )
     
     # Aplicar filtros
     if role:
@@ -75,6 +92,48 @@ async def get_managed_users(
             is_active=u.is_active,
             created_at=u.created_at
         ) for u in users
+    ]
+
+@router.get("/available-locations-for-users", response_model=List[LocationResponse])
+async def get_available_locations_for_user_creation(
+    role: Optional[UserRole] = Query(None, description="Filtrar por rol de usuario a crear"),
+    current_user: User = Depends(require_roles(["administrador", "boss"])),
+    db: Session = Depends(get_db)
+):
+    """
+    Obtener ubicaciones donde el administrador puede crear usuarios
+    
+    **Funcionalidad:**
+    - Administradores ven solo sus ubicaciones asignadas
+    - BOSS ve todas las ubicaciones
+    - Filtro por tipo según el rol del usuario a crear
+    """
+    service = AdminService(db)
+    
+    # Obtener ubicaciones gestionadas
+    managed_locations = service.repository.get_managed_locations(current_user.id)
+    
+    # Filtrar por tipo según rol
+    if role:
+        if role == UserRole.VENDEDOR:
+            managed_locations = [loc for loc in managed_locations if loc.type == "local"]
+        elif role == UserRole.BODEGUERO:
+            managed_locations = [loc for loc in managed_locations if loc.type == "bodega"]
+        # Corredores pueden ir a cualquier tipo de ubicación
+    
+    return [
+        LocationResponse(
+            id=loc.id,
+            name=loc.name,
+            type=loc.type,
+            address=loc.address,
+            phone=loc.phone,
+            is_active=loc.is_active,
+            created_at=loc.created_at,
+            assigned_users_count=len([u for u in loc.users if u.is_active]),
+            total_products=0,  # Calcular si es necesario
+            total_inventory_value=Decimal('0')  # Calcular si es necesario
+        ) for loc in managed_locations
     ]
 
 @router.put("/users/{user_id}", response_model=UserResponse)
@@ -847,3 +906,209 @@ async def get_video_job_status(
     """Consultar estado de job de video"""
     service = AdminService(db)
     return await service.get_video_processing_status(job_id, current_user)
+
+
+# ==================== GESTIÓN DE ASIGNACIONES DE ADMINISTRADORES ====================
+
+@router.post("/admin-assignments", response_model=AdminLocationAssignmentResponse)
+async def assign_admin_to_location(
+    assignment: AdminLocationAssignmentCreate,
+    current_user: User = Depends(require_roles(["boss"])),
+    db: Session = Depends(get_db)
+):
+    """
+    **SOLO BOSS:** Asignar administrador a ubicación específica
+    
+    **Funcionalidad:**
+    - Solo el BOSS puede asignar administradores a ubicaciones
+    - Valida que el usuario sea administrador
+    - Evita asignaciones duplicadas
+    - Mantiene historial de quién hizo la asignación
+    
+    **Casos de uso:**
+    - Nuevo administrador se encarga de un local
+    - Redistribución de responsabilidades
+    - Expansión a nuevas ubicaciones
+    """
+    service = AdminService(db)
+    return await service.assign_admin_to_locations(assignment, current_user)
+
+@router.post("/admin-assignments/bulk", response_model=List[AdminLocationAssignmentResponse])
+async def assign_admin_to_multiple_locations(
+    bulk_assignment: AdminLocationAssignmentBulk,
+    current_user: User = Depends(require_roles(["boss"])),
+    db: Session = Depends(get_db)
+):
+    """
+    **SOLO BOSS:** Asignar administrador a múltiples ubicaciones
+    
+    **Funcionalidad:**
+    - Asignación masiva para administradores que gestionan múltiples ubicaciones
+    - Proceso atómico por ubicación (si una falla, continúa con las demás)
+    - Notas aplicadas a todas las asignaciones
+    """
+    service = AdminService(db)
+    return await service.assign_admin_to_multiple_locations(bulk_assignment, current_user)
+
+@router.get("/admin-assignments", response_model=List[AdminLocationAssignmentResponse])
+async def get_admin_assignments(
+    admin_id: Optional[int] = Query(None, description="ID del administrador (solo para BOSS)"),
+    current_user: User = Depends(require_roles(["administrador", "boss"])),
+    db: Session = Depends(get_db)
+):
+    """
+    Obtener asignaciones de ubicaciones
+    
+    **Para administradores:** Ve solo sus propias asignaciones
+    **Para BOSS:** Puede ver asignaciones de cualquier administrador
+    """
+    service = AdminService(db)
+    
+    if current_user.role == "boss":
+        if admin_id:
+            # BOSS viendo asignaciones de un administrador específico
+            admin = db.query(User).filter(User.id == admin_id).first()
+            if not admin:
+                raise HTTPException(status_code=404, detail="Administrador no encontrado")
+            return await service.get_admin_assignments(admin)
+        else:
+            # BOSS viendo todas las asignaciones
+            return await service.get_all_admin_assignments(current_user)
+    else:
+        # Administrador viendo solo sus asignaciones
+        return await service.get_admin_assignments(current_user)
+
+@router.delete("/admin-assignments/{admin_id}/{location_id}")
+async def remove_admin_assignment(
+    admin_id: int,
+    location_id: int,
+    current_user: User = Depends(require_roles(["boss"])),
+    db: Session = Depends(get_db)
+):
+    """
+    **SOLO BOSS:** Remover asignación de administrador a ubicación
+    
+    **Funcionalidad:**
+    - Solo el BOSS puede remover asignaciones
+    - Desactiva la asignación (no la elimina para mantener historial)
+    - Los usuarios bajo gestión del administrador quedan sin supervisión directa
+    """
+    service = AdminService(db)
+    return await service.remove_admin_assignment(admin_id, location_id, current_user)
+
+@router.get("/my-locations", response_model=List[LocationResponse])
+async def get_my_assigned_locations(
+    current_user: User = Depends(require_roles(["administrador"])),
+    db: Session = Depends(get_db)
+):
+    """
+    **SOLO ADMINISTRADORES:** Ver ubicaciones asignadas al administrador actual
+    
+    **Funcionalidad:**
+    - Muestra solo las ubicaciones donde el administrador tiene permisos
+    - Incluye estadísticas básicas de cada ubicación
+    - Base para otros endpoints que requieren validación de permisos
+    """
+    service = AdminService(db)
+    
+    # Usar el método corregido que ya filtra por asignaciones
+    locations = await service.get_managed_locations(current_user)
+    
+    return locations
+
+# ==================== ENDPOINTS DE VALIDACIÓN ====================
+
+@router.get("/can-manage-location/{location_id}")
+async def can_manage_location(
+    location_id: int,
+    current_user: User = Depends(require_roles(["administrador", "boss"])),
+    db: Session = Depends(get_db)
+):
+    """
+    Verificar si el administrador actual puede gestionar una ubicación específica
+    """
+    
+    if current_user.role == "boss":
+        return {"can_manage": True, "reason": "BOSS has access to all locations"}
+    
+    # Verificar asignación específica
+    assignment = db.query(AdminLocationAssignment)\
+        .filter(
+            AdminLocationAssignment.admin_id == current_user.id,
+            AdminLocationAssignment.location_id == location_id,
+            AdminLocationAssignment.is_active == True
+        ).first()
+    
+    return {
+        "can_manage": assignment is not None,
+        "reason": "Assigned location" if assignment else "Not assigned to this location"
+    }
+
+@router.get("/available-admins", response_model=List[UserResponse])
+async def get_available_administrators(
+    current_user: User = Depends(require_roles(["boss"])),
+    db: Session = Depends(get_db)
+):
+    """
+    **SOLO BOSS:** Obtener lista de administradores disponibles para asignar
+    """
+    
+    admins = db.query(User)\
+        .filter(
+            User.role == "administrador",
+            User.is_active == True
+        )\
+        .order_by(User.first_name, User.last_name)\
+        .all()
+    
+    return [
+        UserResponse(
+            id=admin.id,
+            email=admin.email,
+            first_name=admin.first_name,
+            last_name=admin.last_name,
+            full_name=admin.full_name,
+            role=admin.role,
+            location_id=admin.location_id,
+            location_name=admin.location.name if admin.location else None,
+            is_active=admin.is_active,
+            created_at=admin.created_at
+        ) for admin in admins
+    ]
+
+@router.get("/unassigned-locations", response_model=List[LocationResponse])
+async def get_unassigned_locations(
+    current_user: User = Depends(require_roles(["boss"])),
+    db: Session = Depends(get_db)
+):
+    """
+    **SOLO BOSS:** Obtener ubicaciones que no tienen administrador asignado
+    """
+    
+    # Ubicaciones sin asignaciones activas
+    assigned_location_ids = db.query(AdminLocationAssignment.location_id)\
+        .filter(AdminLocationAssignment.is_active == True)\
+        .subquery()
+    
+    unassigned_locations = db.query(Location)\
+        .filter(
+            Location.is_active == True,
+            ~Location.id.in_(assigned_location_ids)
+        )\
+        .order_by(Location.name)\
+        .all()
+    
+    return [
+        LocationResponse(
+            id=loc.id,
+            name=loc.name,
+            type=loc.type,
+            address=loc.address,
+            phone=loc.phone,
+            is_active=loc.is_active,
+            created_at=loc.created_at,
+            assigned_users_count=0,  # No calculado para eficiencia
+            total_products=0,        # No calculado para eficiencia
+            total_inventory_value=Decimal('0')  # No calculado para eficiencia
+        ) for loc in unassigned_locations
+    ]
