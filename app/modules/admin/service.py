@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, date
 from typing import List, Optional, Dict, Any
 from fastapi import HTTPException, status
+from sqlalchemy import func 
 from sqlalchemy.orm import Session
 from decimal import Decimal
 from app.shared.services.video_microservice_client import VideoMicroserviceClient
@@ -373,19 +374,32 @@ class AdminService:
         
         location_responses = []
         for location in locations:
-            # Calcular estadísticas básicas
-            
-            # 1. Contar usuarios asignados a esta ubicación
-            users_count = self.db.query(User)\
-                .filter(User.location_id == location.id, User.is_active == True).count()
-            
-            # 2. Contar productos usando location_name (según tu esquema BD)
-            products_count = self.db.query(Product)\
-                .filter(Product.location_name == location.name, Product.is_active == 1).count()
-            
-            # 3. Calcular valor del inventario usando unit_price
-            inventory_value = self.db.query(func.sum(Product.unit_price))\
-                .filter(Product.location_name == location.name, Product.is_active == 1).scalar() or Decimal('0')
+            try:
+                # 1. Contar usuarios asignados a esta ubicación
+                users_count = self.db.query(User)\
+                    .filter(User.location_id == location.id, User.is_active == True).count()
+                
+                # 2. Contar productos usando location_name (según tu modelo)
+                products_count = self.db.query(Product)\
+                    .filter(Product.location_name == location.name, Product.is_active == 1).count()
+                
+                # 3. Calcular valor del inventario 
+                # Sumar (unit_price * total_quantity) para valor real del inventario
+                inventory_value_query = self.db.query(
+                    func.sum(Product.unit_price * Product.total_quantity)
+                ).filter(
+                    Product.location_name == location.name, 
+                    Product.is_active == 1
+                ).scalar()
+                
+                inventory_value = inventory_value_query or Decimal('0')
+                
+            except Exception as e:
+                # Si hay error calculando estadísticas, usar valores por defecto
+                print(f"Warning: Error calculando stats para ubicación {location.name}: {e}")
+                users_count = 0
+                products_count = 0
+                inventory_value = Decimal('0')
             
             location_responses.append(LocationResponse(
                 id=location.id,
