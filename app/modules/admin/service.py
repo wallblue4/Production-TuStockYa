@@ -374,15 +374,18 @@ class AdminService:
         location_responses = []
         for location in locations:
             # Calcular estadísticas básicas
+            
+            # 1. Contar usuarios asignados a esta ubicación
             users_count = self.db.query(User)\
                 .filter(User.location_id == location.id, User.is_active == True).count()
             
+            # 2. Contar productos usando location_name (según tu esquema BD)
             products_count = self.db.query(Product)\
-                .filter(Product.location_id == location.id, Product.is_active == 1).count()
+                .filter(Product.location_name == location.name, Product.is_active == 1).count()
             
-            # Valor del inventario (simplificado)
-            inventory_value = self.db.query(func.sum(Product.price))\
-                .filter(Product.location_id == location.id, Product.is_active == 1).scalar() or Decimal('0')
+            # 3. Calcular valor del inventario usando unit_price
+            inventory_value = self.db.query(func.sum(Product.unit_price))\
+                .filter(Product.location_name == location.name, Product.is_active == 1).scalar() or Decimal('0')
             
             location_responses.append(LocationResponse(
                 id=location.id,
