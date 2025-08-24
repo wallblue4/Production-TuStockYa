@@ -428,7 +428,8 @@ class AdminService:
     
     async def assign_user_to_location(
         self, 
-        assignment: UserAssignment, 
+        assignment: UserAssignment,
+        update_data: UserUpdate, 
         admin: User
     ) -> Dict[str, Any]:
         """
