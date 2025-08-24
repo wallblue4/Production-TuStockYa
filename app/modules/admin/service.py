@@ -260,6 +260,120 @@ class AdminService:
                 notes=assignment.notes
             ) for assignment in assignments
         ]
+
+    async def update_user(
+        self,
+        user_id: int,
+        update_data: UserUpdate,
+        admin: User
+    ) -> UserResponse:
+        """
+        Actualizar usuario con validaciones de permisos
+        
+        **Validaciones:**
+        - Admin solo puede actualizar usuarios en ubicaciones bajo su control
+        - Si se cambia la ubicación, la nueva ubicación debe estar bajo su control
+        - Validar compatibilidad rol-ubicación si se cambia ubicación
+        """
+        
+        # 1. Buscar el usuario que se quiere actualizar
+        user = self.db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Usuario no encontrado"
+            )
+        
+        # ====== VALIDACIÓN: ADMIN PUEDE GESTIONAR USUARIO ACTUAL ======
+        if user.location_id:
+            can_manage_current = await self._can_admin_manage_location(admin.id, user.location_id)
+            if not can_manage_current:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"No tienes permisos para gestionar usuarios en la ubicación actual del usuario"
+                )
+        
+        # ====== VALIDACIÓN: NUEVA UBICACIÓN BAJO CONTROL (si se especifica) ======
+        update_dict = update_data.dict(exclude_unset=True)
+        if "location_id" in update_dict and update_dict["location_id"] is not None:
+            new_location_id = update_dict["location_id"]
+            
+            can_manage_new = await self._can_admin_manage_location(admin.id, new_location_id)
+            if not can_manage_new:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"No tienes permisos para asignar usuarios a la ubicación {new_location_id}"
+                )
+            
+            # Validar compatibilidad rol-ubicación
+            new_location = self.db.query(Location).filter(Location.id == new_location_id).first()
+            if not new_location:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Nueva ubicación no encontrada"
+                )
+            
+            # Validar compatibilidad con el rol del usuario
+            if user.role == "vendedor" and new_location.type != "local":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Vendedores solo pueden asignarse a locales"
+                )
+            elif user.role == "bodeguero" and new_location.type != "bodega":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Bodegueros solo pueden asignarse a bodegas"
+                )
+        
+        # ====== REALIZAR ACTUALIZACIÓN ======
+        try:
+            # Actualizar campos del usuario
+            for key, value in update_dict.items():
+                if hasattr(user, key) and value is not None:
+                    setattr(user, key, value)
+            
+            # Si se cambió la ubicación, actualizar también user_location_assignments
+            if "location_id" in update_dict and update_dict["location_id"] is not None:
+                from app.shared.database.models import UserLocationAssignment
+                
+                # Desactivar asignación anterior
+                self.db.query(UserLocationAssignment)\
+                    .filter(
+                        UserLocationAssignment.user_id == user_id,
+                        UserLocationAssignment.is_active == True
+                    ).update({"is_active": False})
+                
+                # Crear nueva asignación
+                new_assignment = UserLocationAssignment(
+                    user_id=user_id,
+                    location_id=update_dict["location_id"],
+                    role_at_location=user.role,
+                    is_active=True
+                )
+                self.db.add(new_assignment)
+            
+            self.db.commit()
+            self.db.refresh(user)
+            
+            return UserResponse(
+                id=user.id,
+                email=user.email,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                full_name=user.full_name,
+                role=user.role,
+                location_id=user.location_id,
+                location_name=user.location.name if user.location else None,
+                is_active=user.is_active,
+                created_at=user.created_at
+            )
+            
+        except Exception as e:
+            self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error actualizando usuario: {str(e)}"
+            )
     
     async def remove_admin_assignment(
         self,
