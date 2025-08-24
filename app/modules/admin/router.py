@@ -174,16 +174,28 @@ async def assign_user_to_location(
     AD005: Asignar vendedores a locales específicos
     AD006: Asignar bodegueros a bodegas específicas
     
+    **VALIDACIONES DE PERMISOS AGREGADAS:**
+    - Solo puede asignar usuarios que estén en ubicaciones bajo su control
+    - Solo puede asignar a ubicaciones que él gestiona
+    - Validar compatibilidad rol-ubicación
+    - BOSS puede asignar cualquier usuario a cualquier ubicación
+    
     **Funcionalidad:**
     - Asignar/reasignar usuarios a ubicaciones específicas
-    - Validar compatibilidad entre rol de usuario y tipo de ubicación
-    - Mantener historial de asignaciones
+    - Validar que admin controla tanto usuario como ubicación destino
+    - Mantener historial de asignaciones en user_location_assignments
     - Actualizar ubicación principal del usuario
     
-    **Casos de uso:**
-    - Vendedor se cambia de local
-    - Bodeguero se asigna a nueva bodega
-    - Redistribución de personal por necesidades operativas
+    **Casos de uso válidos:**
+    - Admin mueve vendedor entre sus locales asignados
+    - Admin mueve bodeguero entre sus bodegas
+    - BOSS redistribuye personal entre cualquier ubicación
+    - Asignar usuario recién creado a ubicación específica
+    
+    **Casos que fallarán:**
+    - Admin intenta mover usuario de otro admin
+    - Admin intenta asignar a ubicación no controlada
+    - Intentar asignar vendedor a bodega o bodeguero a local
     """
     service = AdminService(db)
     return await service.assign_user_to_location(assignment, current_user)
