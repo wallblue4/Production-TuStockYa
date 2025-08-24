@@ -443,6 +443,28 @@ class AdminService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Usuario no encontrado"
             )
+
+        if user.location_id:
+            can_manage_current = await self._can_admin_manage_location(admin.id, user.location_id)
+            if not can_manage_current:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"No tienes permisos para gestionar usuarios en la ubicación actual del usuario"
+                )
+        
+        # ====== VALIDACIÓN: NUEVA UBICACIÓN BAJO CONTROL (si se especifica) ======
+        update_dict = update_data.dict(exclude_unset=True)
+        
+        if "location_id" in update_dict and update_dict["location_id"] is not None:
+            new_location_id = update_dict["location_id"]
+            
+            can_manage_new = await self._can_admin_manage_location(admin.id, new_location_id)
+            if not can_manage_new:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"No tienes permisos para asignar usuarios a la ubicación {new_location_id}"
+                )
+            
         
         # Validar ubicación
         location = self.db.query(Location).filter(Location.id == assignment.location_id).first()
