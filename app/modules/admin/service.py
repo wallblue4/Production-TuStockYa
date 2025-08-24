@@ -2,12 +2,13 @@
 import json
 import asyncio
 from datetime import datetime, timedelta, date
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any , Callable, Union
 from fastapi import HTTPException, status
 from sqlalchemy import func 
 from sqlalchemy.orm import Session
 from decimal import Decimal
 from app.shared.services.video_microservice_client import VideoMicroserviceClient
+from functools import wraps
 import uuid
 
 from fastapi import APIRouter, Depends, Query, File, UploadFile, Form
@@ -139,7 +140,81 @@ class AdminService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error creando usuario y asignación: {str(e)}"
             )
-
+    async def _validate_location_access(
+        self, 
+        admin: User, 
+        location_id: int, 
+        action: str = "gestionar"
+    ) -> Location:
+        """
+        Validar acceso a ubicación específica
+        
+        Returns:
+            Location: La ubicación validada
+        """
+        if not location_id:
+            raise HTTPException(400, "ID de ubicación requerido")
+            
+        location = self.db.query(Location).filter(Location.id == location_id).first()
+        if not location:
+            raise HTTPException(404, f"Ubicación {location_id} no encontrada")
+        
+        can_manage = await self._can_admin_manage_location(admin.id, location_id)
+        if not can_manage:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"No tienes permisos para {action} en '{location.name}' ({location.type})"
+            )
+        
+        return location
+    
+    async def _filter_managed_locations(
+        self, 
+        admin: User, 
+        requested_location_ids: Optional[List[int]] = None
+    ) -> List[int]:
+        """Filtrar solo ubicaciones gestionadas"""
+        managed_locations = self.repository.get_managed_locations(admin.id)
+        managed_ids = [loc.id for loc in managed_locations]
+        
+        if requested_location_ids:
+            invalid_ids = set(requested_location_ids) - set(managed_ids)
+            if invalid_ids:
+                invalid_names = []
+                for inv_id in invalid_ids:
+                    loc = self.db.query(Location).filter(Location.id == inv_id).first()
+                    invalid_names.append(loc.name if loc else f"ID-{inv_id}")
+                
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Sin permisos para ubicaciones: {', '.join(invalid_names)}"
+                )
+            return requested_location_ids
+        
+        return managed_ids
+    
+    async def _validate_user_access(
+        self, 
+        admin: User, 
+        user_id: int, 
+        action: str = "gestionar"
+    ) -> User:
+        """Validar acceso a usuario específico"""
+        user = self.db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(404, f"Usuario {user_id} no encontrado")
+        
+        if user.location_id:
+            await self._validate_location_access(admin, user.location_id, f"{action} usuario")
+        elif admin.role != "boss":
+            raise HTTPException(403, "Solo BOSS puede gestionar usuarios sin ubicación")
+        
+        return user
+    
+    async def _get_managed_user_ids(self, admin: User) -> List[int]:
+        """Obtener IDs de usuarios gestionados"""
+        managed_users = self.repository.get_users_by_admin(admin.id)
+        return [user.id for user in managed_users]
     
     # ==================== AD005 & AD006: ASIGNAR USUARIOS ====================
 
@@ -605,22 +680,16 @@ class AdminService:
         cost_config: CostConfiguration, 
         admin: User
     ) -> CostResponse:
-        """
-        AD007: Configurar costos fijos (arriendo, servicios, nómina)
-        AD008: Configurar costos variables (mercancía, comisiones)
-        """
+        """AD007 & AD008: Configurar costos con validación"""
         
-        # Validar ubicación
-        location = self.db.query(Location)\
-            .filter(Location.id == cost_config.location_id).first()
+        # ✅ Validar acceso a la ubicación
+        location = await self._validate_location_access(
+            admin, 
+            cost_config.location_id, 
+            "configurar costos"
+        )
         
-        if not location:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Ubicación no encontrada"
-            )
-        
-        # Crear configuración de costo
+        # Continuar con lógica de negocio
         cost_data = cost_config.dict()
         result = self.repository.create_cost_configuration(cost_data, admin.id)
         
@@ -642,195 +711,166 @@ class AdminService:
     # ==================== AD009: VENTAS AL POR MAYOR ====================
     
     async def process_wholesale_sale(
-        self, 
-        sale_data: WholesaleSaleCreate, 
+        self,
+        sale_data: WholesaleSaleCreate,
         admin: User
     ) -> WholesaleSaleResponse:
-        """
-        AD009: Procesar ventas al por mayor
-        """
+        """AD009: Procesar ventas al por mayor con validación"""
         
-        # Validar ubicación
-        location = self.db.query(Location)\
-            .filter(Location.id == sale_data.location_id).first()
+        # ✅ Validar acceso a la ubicación de venta
+        location = await self._validate_location_access(
+            admin, 
+            sale_data.location_id, 
+            "procesar ventas"
+        )
         
-        if not location:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Ubicación no encontrada"
-            )
+        # Validar que es local si es necesario
+        if location.type != "local":
+            raise HTTPException(400, "Ventas al por mayor solo en locales de venta")
         
-        # Validar disponibilidad de productos
-        for item in sale_data.items:
-            availability = self._check_product_availability(
-                item["reference_code"],
-                item["size"],
-                item["quantity"],
-                sale_data.location_id
+        # Continuar con lógica de venta
+        try:
+            # Crear venta mayorista
+            sale_dict = sale_data.dict()
+            sale_dict["processed_by_user_id"] = admin.id
+            
+            db_sale = self.repository.create_wholesale_sale(sale_dict)
+            
+            return WholesaleSaleResponse(
+                id=db_sale.id,
+                customer_name=sale_data.customer_name,
+                customer_document=sale_data.customer_document,
+                customer_phone=sale_data.customer_phone,
+                location_id=location.id,
+                location_name=location.name,
+                total_amount=db_sale.total_amount,
+                discount_amount=db_sale.discount_amount,
+                final_amount=db_sale.final_amount,
+                payment_method=sale_data.payment_method,
+                sale_date=db_sale.created_at,
+                processed_by_user_id=admin.id,
+                processed_by_name=admin.full_name,
+                items_count=len(sale_data.items),
+                notes=sale_data.notes
             )
             
-            if not availability["available"]:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Stock insuficiente para {item['reference_code']} talla {item['size']}"
-                )
-        
-        # Procesar venta
-        sale_dict = sale_data.dict()
-        result = self.repository.create_wholesale_sale(sale_dict, admin.id)
-        
-        return WholesaleSaleResponse(
-            id=result["id"],
-            customer_name=sale_data.customer_name,
-            customer_document=sale_data.customer_document,
-            customer_phone=sale_data.customer_phone,
-            location_id=sale_data.location_id,
-            location_name=location.name,
-            total_amount=result["total_amount"],
-            discount_amount=result["discount_amount"],
-            final_amount=result["final_amount"],
-            payment_method=sale_data.payment_method,
-            sale_date=result["sale_date"],
-            processed_by_user_id=admin.id,
-            processed_by_name=admin.full_name,
-            items_count=result["items_count"],
-            notes=sale_data.notes
-        )
+        except Exception as e:
+            self.db.rollback()
+            raise HTTPException(500, f"Error procesando venta mayorista: {str(e)}")
     
     # ==================== AD010: REPORTES DE VENTAS ====================
     
     async def generate_sales_report(
-        self, 
-        filters: ReportFilter, 
+        self,
+        filters: ReportFilter,
         admin: User
     ) -> List[SalesReport]:
-        """
-        AD010: Generar reportes de ventas por local y período
-        """
+        """AD010: Generar reportes con validación de ubicaciones"""
         
-        # Si no se especifican ubicaciones, usar las gestionadas por el admin
-        if not filters.location_ids:
-            managed_locations = self.repository.get_managed_locations(admin.id)
-            filters.location_ids = [loc.id for loc in managed_locations]
-        
-        # Generar reportes
-        reports_data = self.repository.generate_sales_report(
-            location_ids=filters.location_ids,
-            start_date=filters.start_date,
-            end_date=filters.end_date,
-            user_ids=filters.user_ids
+        # ✅ Filtrar solo ubicaciones que puede gestionar
+        managed_location_ids = await self._filter_managed_locations(
+            admin, 
+            filters.location_ids
         )
         
-        return [
-            SalesReport(
-                location_id=report["location_id"],
-                location_name=report["location_name"],
-                period_start=report["period_start"],
-                period_end=report["period_end"],
-                total_sales=Decimal(str(report["total_sales"])),
-                total_transactions=report["total_transactions"],
-                average_ticket=Decimal(str(report["average_ticket"])),
-                top_products=report["top_products"],
-                sales_by_day=report["sales_by_day"],
-                sales_by_user=report["sales_by_user"]
-            ) for report in reports_data
-        ]
+        # ✅ Validar usuarios si se especifican
+        if filters.user_ids:
+            managed_user_ids = await self._get_managed_user_ids(admin)
+            invalid_users = set(filters.user_ids) - set(managed_user_ids)
+            if invalid_users:
+                raise HTTPException(403, f"Sin permisos para usuarios: {list(invalid_users)}")
+        
+        # Actualizar filtros con datos validados
+        filters.location_ids = managed_location_ids
+        
+        # Generar reportes
+        reports = self.repository.generate_sales_reports(filters)
+        return reports
     
     # ==================== AD011: ALERTAS DE INVENTARIO ====================
     
     async def configure_inventory_alert(
-        self, 
-        alert_config: InventoryAlert, 
+        self,
+        alert_config: InventoryAlert,
         admin: User
     ) -> InventoryAlertResponse:
-        """
-        AD011: Configurar alertas de inventario mínimo
-        """
+        """AD011: Configurar alertas con validación"""
         
-        # Validar ubicación
-        location = self.db.query(Location)\
-            .filter(Location.id == alert_config.location_id).first()
-        
-        if not location:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Ubicación no encontrada"
-            )
-        
-        # En producción, esto se almacenaría en una tabla de alertas
-        # Por ahora, creamos un registro en inventory_changes
-        from app.shared.database.models import InventoryChange
-        
-        alert_record = InventoryChange(
-            product_id=None,
-            change_type="inventory_alert_config",
-            quantity_before=0,
-            quantity_after=alert_config.threshold_value,
-            user_id=admin.id,
-            notes=f"ALERTA CONFIG: {alert_config.alert_type.value} - Umbral: {alert_config.threshold_value} - Emails: {','.join(alert_config.notification_emails)} - Producto: {alert_config.product_reference or 'TODOS'}"
+        # ✅ Validar acceso a la ubicación
+        location = await self._validate_location_access(
+            admin,
+            alert_config.location_id,
+            "configurar alertas de inventario"
         )
         
-        self.db.add(alert_record)
-        self.db.commit()
-        self.db.refresh(alert_record)
+        # Crear alerta
+        alert_data = alert_config.dict()
+        alert_data["created_by_user_id"] = admin.id
+        
+        db_alert = self.repository.create_inventory_alert(alert_data)
         
         return InventoryAlertResponse(
-            id=alert_record.id,
-            location_id=alert_config.location_id,
+            id=db_alert.id,
+            location_id=location.id,
             location_name=location.name,
             alert_type=alert_config.alert_type.value,
-            threshold_value=alert_config.threshold_value,
+            threshold_quantity=alert_config.threshold_quantity,
             product_reference=alert_config.product_reference,
-            notification_emails=alert_config.notification_emails,
             is_active=alert_config.is_active,
-            created_by_user_id=admin.id,
             created_by_name=admin.full_name,
-            created_at=alert_record.created_at,
-            last_triggered=None
+            created_at=db_alert.created_at
         )
     
     # ==================== AD012: APROBAR DESCUENTOS ====================
     
     async def approve_discount_request(
-        self, 
-        approval: DiscountApproval, 
+        self,
+        approval: DiscountApproval,
         admin: User
     ) -> DiscountRequestResponse:
-        """
-        AD012: Aprobar solicitudes de descuento de vendedores
-        """
+        """AD012: Aprobar descuentos con validación de usuario"""
         
-        # Procesar aprobación
-        discount_request = self.repository.approve_discount_request(
-            request_id=approval.discount_request_id,
-            approved=approval.approved,
-            admin_id=admin.id,
-            admin_notes=approval.admin_notes
-        )
+        # Buscar solicitud de descuento
+        discount_request = self.db.query(DiscountRequest).filter(
+            DiscountRequest.id == approval.request_id
+        ).first()
         
         if not discount_request:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Solicitud de descuento no encontrada"
-            )
+            raise HTTPException(404, "Solicitud de descuento no encontrada")
+        
+        # ✅ Validar que puede gestionar al vendedor solicitante
+        seller = await self._validate_user_access(
+            admin, 
+            discount_request.seller_id, 
+            "aprobar descuentos de"
+        )
+        
+        # Actualizar solicitud
+        discount_request.status = approval.status
+        discount_request.administrator_id = admin.id
+        discount_request.reviewed_at = datetime.now()
+        discount_request.admin_comments = approval.admin_notes
+        
+        self.db.commit()
+        self.db.refresh(discount_request)
         
         return DiscountRequestResponse(
             id=discount_request.id,
             sale_id=discount_request.sale_id,
-            requester_user_id=discount_request.requester_user_id,
-            requester_name=discount_request.requester.full_name if discount_request.requester else "Unknown",
-            location_id=discount_request.location_id,
-            location_name=discount_request.location.name if discount_request.location else "Unknown",
-            original_amount=discount_request.original_amount,
-            discount_amount=discount_request.discount_amount,
-            discount_percentage=discount_request.discount_percentage,
+            requester_user_id=discount_request.seller_id,
+            requester_name=seller.full_name,
+            location_id=seller.location_id,
+            location_name=seller.location.name if seller.location else None,
+            original_amount=discount_request.amount,
+            discount_amount=approval.discount_amount if hasattr(approval, 'discount_amount') else discount_request.amount,
+            discount_percentage=approval.discount_percentage if hasattr(approval, 'discount_percentage') else None,
             reason=discount_request.reason,
             status=discount_request.status,
             requested_at=discount_request.requested_at,
-            approved_by_user_id=discount_request.approved_by_user_id,
+            approved_by_user_id=admin.id,
             approved_by_name=admin.full_name,
-            approved_at=discount_request.approved_at,
-            admin_notes=discount_request.admin_notes
+            approved_at=discount_request.reviewed_at,
+            admin_notes=discount_request.admin_comments
         )
     
     async def get_pending_discount_requests(self, admin: User) -> List[DiscountRequestResponse]:
@@ -864,14 +904,22 @@ class AdminService:
     # ==================== AD013: SUPERVISAR TRASLADOS ====================
     
     async def get_transfers_overview(self, admin: User) -> Dict[str, Any]:
-        """
-        AD013: Supervisar traslados entre locales y bodegas
-        """
+        """AD013: Supervisar traslados con validación"""
         
-        managed_locations = self.repository.get_managed_locations(admin.id)
-        location_ids = [loc.id for loc in managed_locations]
+        # ✅ Obtener solo ubicaciones gestionadas
+        managed_location_ids = await self._filter_managed_locations(admin)
         
-        return self.repository.get_transfers_overview(location_ids)
+        if not managed_location_ids:
+            return {
+                "managed_locations": [],
+                "total_transfers": 0,
+                "transfers_by_status": {},
+                "pending_transfers": [],
+                "recent_transfers": []
+            }
+        
+        # Obtener overview de transferencias
+        return self.repository.get_transfers_overview(managed_location_ids)
     
     # ==================== AD014: SUPERVISAR PERFORMANCE ====================
     
@@ -882,28 +930,22 @@ class AdminService:
         end_date: date,
         user_ids: Optional[List[int]] = None
     ) -> List[Dict[str, Any]]:
-        """
-        AD014: Supervisar performance de vendedores y bodegueros
-        """
+        """AD014: Performance con validación de usuarios"""
         
-        # Obtener usuarios gestionados
+        # ✅ Obtener solo usuarios gestionados
+        if user_ids:
+            # Validar que puede gestionar todos los usuarios solicitados
+            for user_id in user_ids:
+                await self._validate_user_access(admin, user_id, "ver performance de")
+        else:
+            # Si no especifica, usar todos los gestionados
+            user_ids = await self._get_managed_user_ids(admin)
+        
         if not user_ids:
-            managed_users = self.repository.get_users_by_admin(admin.id)
-            user_ids = [user.id for user in managed_users]
+            return []
         
-        performance_data = []
-        
-        for user_id in user_ids:
-            performance = self.repository.get_user_performance(
-                user_id=user_id,
-                start_date=start_date,
-                end_date=end_date
-            )
-            
-            if performance:
-                performance_data.append(performance)
-        
-        return performance_data
+        # Obtener performance de usuarios
+        return self.repository.get_users_performance(user_ids, start_date, end_date)
     
     # ==================== AD015: ASIGNACIÓN DE MODELOS ====================
     
@@ -994,7 +1036,9 @@ class AdminService:
         """
         Dashboard completo del administrador con todas las métricas
         """
-        
+        managed_location_ids = await self._filter_managed_locations(admin)
+        managed_user_ids = await self._get_managed_user_ids(admin)
+
         dashboard_data = self.repository.get_admin_dashboard_data(admin.id)
         
         managed_locations = [
@@ -1327,3 +1371,91 @@ class AdminService:
             error_message=None,
             notes=record.notes
         )
+
+    def require_location_access(location_param: str = "location_id", action: str = "gestionar"):
+        """
+        Decorador para validar automáticamente acceso a ubicaciones
+        
+        Args:
+            location_param: Nombre del parámetro que contiene location_id
+            action: Descripción de la acción para el mensaje de error
+        """
+        def decorator(func: Callable):
+            @wraps(func)
+            async def wrapper(self, *args, **kwargs):
+                # Buscar el parámetro admin/current_user
+                admin = None
+                for arg in args:
+                    if hasattr(arg, 'role') and hasattr(arg, 'id'):
+                        admin = arg
+                        break
+                
+                if not admin:
+                    raise HTTPException(500, "Admin user not found in method parameters")
+                
+                # Buscar location_id en los argumentos
+                location_id = None
+                
+                # Buscar en argumentos posicionales
+                for arg in args:
+                    if hasattr(arg, location_param):
+                        location_id = getattr(arg, location_param)
+                        break
+                
+                # Buscar en kwargs
+                if location_id is None and location_param in kwargs:
+                    location_id = kwargs[location_param]
+                
+                # Validar acceso si se encontró location_id
+                if location_id:
+                    await self._validate_location_access(admin, location_id, action)
+                
+                # Ejecutar función original
+                return await func(self, *args, **kwargs)
+            
+            return wrapper
+        return decorator
+
+def require_location_access(location_param: str = "location_id", action: str = "gestionar"):
+    """
+    Decorador para validar automáticamente acceso a ubicaciones
+    
+    Args:
+        location_param: Nombre del parámetro que contiene location_id
+        action: Descripción de la acción para el mensaje de error
+    """
+    def decorator(func: Callable):
+        @wraps(func)
+        async def wrapper(self, *args, **kwargs):
+            # Buscar el parámetro admin/current_user
+            admin = None
+            for arg in args:
+                if hasattr(arg, 'role') and hasattr(arg, 'id'):
+                    admin = arg
+                    break
+            
+            if not admin:
+                raise HTTPException(500, "Admin user not found in method parameters")
+            
+            # Buscar location_id en los argumentos
+            location_id = None
+            
+            # Buscar en argumentos posicionales
+            for arg in args:
+                if hasattr(arg, location_param):
+                    location_id = getattr(arg, location_param)
+                    break
+            
+            # Buscar en kwargs
+            if location_id is None and location_param in kwargs:
+                location_id = kwargs[location_param]
+            
+            # Validar acceso si se encontró location_id
+            if location_id:
+                await self._validate_location_access(admin, location_id, action)
+            
+            # Ejecutar función original
+            return await func(self, *args, **kwargs)
+        
+        return wrapper
+    return decorator
