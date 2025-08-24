@@ -428,76 +428,121 @@ class AdminService:
     
     async def assign_user_to_location(
         self, 
-        assignment: UserAssignment,
-        update_data: UserUpdate, 
+        assignment: UserAssignment, 
         admin: User
     ) -> Dict[str, Any]:
         """
         AD005: Asignar vendedores a locales específicos
         AD006: Asignar bodegueros a bodegas específicas
+        
+        **VALIDACIONES DE PERMISOS AGREGADAS:**
+        - Solo puede asignar usuarios que estén en ubicaciones bajo su control
+        - Solo puede asignar a ubicaciones que él gestiona
+        - Validar compatibilidad rol-ubicación
+        - BOSS puede asignar cualquier usuario a cualquier ubicación
         """
         
-        # Validar usuario
+        # 1. Buscar el usuario que se quiere asignar
         user = self.db.query(User).filter(User.id == assignment.user_id).first()
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Usuario no encontrado"
             )
-
+        
+        # ====== VALIDACIÓN: ADMIN PUEDE GESTIONAR USUARIO ACTUAL ======
         if user.location_id:
-            can_manage_current = await self._can_admin_manage_location(admin.id, user.location_id)
-            if not can_manage_current:
+            can_manage_current_user = await self._can_admin_manage_location(admin.id, user.location_id)
+            if not can_manage_current_user:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"No tienes permisos para gestionar usuarios en la ubicación actual del usuario"
+                    detail=f"No tienes permisos para gestionar el usuario {user.full_name}. "
+                        f"El usuario está en una ubicación que no controlas."
                 )
-        
-        # ====== VALIDACIÓN: NUEVA UBICACIÓN BAJO CONTROL (si se especifica) ======
-        update_dict = update_data.dict(exclude_unset=True)
-        
-        if "location_id" in update_dict and update_dict["location_id"] is not None:
-            new_location_id = update_dict["location_id"]
-            
-            can_manage_new = await self._can_admin_manage_location(admin.id, new_location_id)
-            if not can_manage_new:
+        else:
+            # Si el usuario no tiene ubicación, solo BOSS puede asignarlo
+            if admin.role != "boss":
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"No tienes permisos para asignar usuarios a la ubicación {new_location_id}"
+                    detail="Solo el BOSS puede asignar usuarios sin ubicación asignada"
                 )
-            
         
-        # Validar ubicación
+        # 2. Buscar la ubicación destino
         location = self.db.query(Location).filter(Location.id == assignment.location_id).first()
         if not location:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Ubicación no encontrada"
+                detail="Ubicación destino no encontrada"
             )
         
-        # Validar compatibilidad rol-ubicación
+        # ====== VALIDACIÓN: ADMIN PUEDE GESTIONAR UBICACIÓN DESTINO ======
+        can_manage_destination = await self._can_admin_manage_location(admin.id, assignment.location_id)
+        if not can_manage_destination:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"No tienes permisos para asignar usuarios a {location.name}. "
+                    f"Esta ubicación no está bajo tu control."
+            )
+        
+        # ====== VALIDACIÓN: COMPATIBILIDAD ROL-UBICACIÓN ======
         if user.role == "vendedor" and location.type != "local":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Vendedores solo pueden asignarse a locales"
+                detail=f"No se puede asignar vendedor {user.full_name} a {location.name} "
+                    f"porque es de tipo '{location.type}'. Vendedores solo pueden ir a locales."
             )
         elif user.role == "bodeguero" and location.type != "bodega":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Bodegueros solo pueden asignarse a bodegas"
+                detail=f"No se puede asignar bodeguero {user.full_name} a {location.name} "
+                    f"porque es de tipo '{location.type}'. Bodegueros solo pueden ir a bodegas."
             )
         
-        # Realizar asignación
-        assignment_data = assignment.dict()
-        result = self.repository.assign_user_to_location(assignment_data)
-        
-        if not result["success"]:
+        # ====== REALIZAR ASIGNACIÓN ======
+        try:
+            # Actualizar ubicación principal del usuario
+            old_location_name = user.location.name if user.location else "Sin ubicación"
+            user.location_id = assignment.location_id
+            
+            # Desactivar asignaciones anteriores en user_location_assignments
+            from app.shared.database.models import UserLocationAssignment
+            
+            self.db.query(UserLocationAssignment)\
+                .filter(
+                    UserLocationAssignment.user_id == assignment.user_id,
+                    UserLocationAssignment.is_active == True
+                ).update({"is_active": False})
+            
+            # Crear nueva asignación en user_location_assignments
+            new_assignment = UserLocationAssignment(
+                user_id=assignment.user_id,
+                location_id=assignment.location_id,
+                role_at_location=assignment.role_in_location or user.role,
+                is_active=True
+            )
+            self.db.add(new_assignment)
+            
+            self.db.commit()
+            self.db.refresh(user)
+            
+            return {
+                "success": True,
+                "message": f"Usuario {user.full_name} asignado correctamente",
+                "user_name": user.full_name,
+                "user_role": user.role,
+                "previous_location": old_location_name,
+                "new_location": location.name,
+                "new_location_type": location.type,
+                "assigned_by": admin.full_name,
+                "assignment_date": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            self.db.rollback()
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result["error"]
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error realizando asignación: {str(e)}"
             )
-        
-        return result
     
     # ==================== AD001 & AD002: GESTIÓN DE UBICACIONES ====================
     
