@@ -145,25 +145,22 @@ async def update_user(
 ):
     """
     Actualizar información de usuario gestionado
+    
+    **VALIDACIONES DE PERMISOS AGREGADAS:**
+    - Solo puede actualizar usuarios en ubicaciones bajo su control
+    - Si cambia la ubicación, debe ser a una ubicación que él gestiona
+    - Validar compatibilidad rol-ubicación
+    - BOSS puede actualizar cualquier usuario
+    
+    **Casos de uso:**
+    - Cambiar nombre/información personal del usuario
+    - Mover vendedor de un local a otro (ambos bajo control del admin)
+    - Mover bodeguero entre bodegas gestionadas
+    - Activar/desactivar usuario
     """
     service = AdminService(db)
     
-    user = service.repository.update_user(user_id, update_data.dict(exclude_unset=True))
-    if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    
-    return UserResponse(
-        id=user.id,
-        email=user.email,
-        first_name=user.first_name,
-        last_name=user.last_name,
-        full_name=user.full_name,
-        role=user.role,
-        location_id=user.location_id,
-        location_name=user.location.name if user.location else None,
-        is_active=user.is_active,
-        created_at=user.created_at
-    )
+    return await service.update_user(user_id, update_data, current_user)
 
 # ==================== AD005 & AD006: ASIGNAR USUARIOS ====================
 
