@@ -140,7 +140,7 @@ class AdminService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error creando usuario y asignación: {str(e)}"
             )
-            
+
     async def _validate_location_access(
         self, 
         admin: User, 
@@ -287,6 +287,48 @@ class AdminService:
             assigned_by_name=boss.full_name,
             notes=db_assignment.notes
         )
+    
+    async def get_cost_configurations(
+        self,
+        admin: User,
+        location_id: Optional[int] = None,
+        cost_type: Optional[str] = None
+    ) -> List[CostResponse]:
+        """
+        Obtener configuraciones de costos con validación de permisos
+        """
+        
+        if location_id:
+            # ✅ Validar acceso a ubicación específica
+            location = await self._validate_location_access(
+                admin, 
+                location_id, 
+                "ver configuraciones de costos"
+            )
+            
+            costs_data = self.repository.get_cost_configurations(location_id)
+            
+            # Filtrar por tipo de costo si se especifica
+            if cost_type:
+                costs_data = [c for c in costs_data if c["cost_type"] == cost_type]
+            
+            return [CostResponse(**cost_data) for cost_data in costs_data]
+        
+        else:
+            # ✅ Obtener de todas las ubicaciones gestionadas
+            managed_location_ids = await self._filter_managed_locations(admin)
+            
+            all_costs = []
+            for loc_id in managed_location_ids:
+                location_costs = self.repository.get_cost_configurations(loc_id)
+                
+                # Filtrar por tipo si se especifica
+                if cost_type:
+                    location_costs = [c for c in location_costs if c["cost_type"] == cost_type]
+                
+                all_costs.extend(location_costs)
+            
+            return [CostResponse(**cost_data) for cost_data in all_costs]
     
     async def assign_admin_to_multiple_locations(
         self,
