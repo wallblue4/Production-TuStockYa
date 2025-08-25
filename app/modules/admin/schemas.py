@@ -228,21 +228,21 @@ class DiscountApproval(BaseModel):
 class DiscountRequestResponse(BaseModel):
     """Respuesta de solicitud de descuento"""
     id: int
-    sale_id: int
+    # sale_id: Optional[int] = None  # ← QUITAR si existe
     requester_user_id: int
     requester_name: str
-    location_id: int
-    location_name: str
+    location_id: Optional[int] = None
+    location_name: Optional[str] = None
     original_amount: Decimal
     discount_amount: Decimal
-    discount_percentage: Decimal
+    discount_percentage: Optional[Decimal] = None
     reason: str
     status: str
     requested_at: datetime
-    approved_by_user_id: Optional[int]
-    approved_by_name: Optional[str]
-    approved_at: Optional[datetime]
-    admin_notes: Optional[str]
+    approved_by_user_id: Optional[int] = None
+    approved_by_name: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    admin_notes: Optional[str] = None
 
 # ==================== SUPERVISIÓN DE PERFORMANCE ====================
 

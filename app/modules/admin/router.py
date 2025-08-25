@@ -425,6 +425,18 @@ async def get_pending_discount_requests(
 ):
     """
     Obtener solicitudes de descuento pendientes de aprobación
+    
+    **VALIDACIONES AGREGADAS:**
+    - Solo ve solicitudes de usuarios en ubicaciones que controla
+    - BOSS puede ver todas las solicitudes pendientes
+    - Información completa del solicitante y ubicación
+    
+    **Funcionalidad:**
+    - Ver todas las solicitudes pendientes de aprobación
+    - Información del vendedor solicitante
+    - Ubicación donde trabaja el vendedor
+    - Monto y razón del descuento solicitado
+    - Fecha de solicitud para priorizar
     """
     service = AdminService(db)
     return await service.get_pending_discount_requests(current_user)
