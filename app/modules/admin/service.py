@@ -918,31 +918,49 @@ class AdminService:
     
     async def get_pending_discount_requests(self, admin: User) -> List[DiscountRequestResponse]:
         """
-        Obtener solicitudes de descuento pendientes de aprobación
+        Obtener solicitudes de descuento pendientes de aprobación con validación
         """
         
-        requests = self.repository.get_pending_discount_requests(admin.id)
+        # ✅ Obtener solicitudes de usuarios que el admin puede gestionar
+        managed_user_ids = await self._get_managed_user_ids(admin)
         
-        return [
-            DiscountRequestResponse(
+        if not managed_user_ids:
+            return []
+        
+        # Filtrar solicitudes solo de usuarios gestionados
+        requests = self.db.query(DiscountRequest)\
+            .filter(
+                DiscountRequest.seller_id.in_(managed_user_ids),
+                DiscountRequest.status == "pending"
+            )\
+            .order_by(DiscountRequest.requested_at)\
+            .all()
+        
+        discount_responses = []
+        for req in requests:
+            # Obtener información del vendedor
+            seller = self.db.query(User).filter(User.id == req.seller_id).first()
+            
+            discount_responses.append(DiscountRequestResponse(
                 id=req.id,
-                sale_id=req.sale_id,
-                requester_user_id=req.requester_user_id,
-                requester_name=req.requester.full_name if req.requester else "Unknown",
-                location_id=req.location_id,
-                location_name=req.location.name if req.location else "Unknown",
-                original_amount=req.original_amount,
-                discount_amount=req.discount_amount,
-                discount_percentage=req.discount_percentage,
+                # ❌ ELIMINAR: sale_id=req.sale_id,  # No existe este campo
+                requester_user_id=req.seller_id,
+                requester_name=seller.full_name if seller else "Usuario desconocido",
+                location_id=seller.location_id if seller else None,
+                location_name=seller.location.name if seller and seller.location else None,
+                original_amount=req.amount,  # ✅ CORREGIDO: usar amount
+                discount_amount=req.amount,   # Mismo valor que el monto solicitado
+                discount_percentage=None,     # No calculado en este modelo
                 reason=req.reason,
                 status=req.status,
                 requested_at=req.requested_at,
-                approved_by_user_id=None,
-                approved_by_name=None,
-                approved_at=None,
-                admin_notes=None
-            ) for req in requests
-        ]
+                approved_by_user_id=None,     # Aún no aprobado
+                approved_by_name=None,        # Aún no aprobado  
+                approved_at=None,             # Aún no aprobado
+                admin_notes=None              # Aún no hay notas
+            ))
+        
+        return discount_responses
     
     # ==================== AD013: SUPERVISAR TRASLADOS ====================
     
