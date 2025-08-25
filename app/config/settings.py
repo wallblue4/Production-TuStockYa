@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     cloudinary_api_key: Optional[str] = None
     cloudinary_api_secret: Optional[str] = None
     cloudinary_folder: str = "tustockya"
+
     
     # File Upload
     max_image_size: int = 10 * 1024 * 1024
