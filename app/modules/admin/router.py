@@ -1165,3 +1165,42 @@ async def get_unassigned_locations(
             total_inventory_value=Decimal('0')  # No calculado para eficiencia
         ) for loc in unassigned_locations
     ]
+
+@router.post("/video-callback")
+async def video_processing_callback(
+    job_id: int = Form(...),
+    status: str = Form(...),
+    results: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Callback para recibir resultados del microservicio de video
+    """
+    try:
+        # Parsear resultados
+        results_dict = json.loads(results)
+        
+        # Buscar el registro en BD
+        processing_record = db.query(InventoryChange).filter(
+            InventoryChange.id == job_id
+        ).first()
+        
+        if not processing_record:
+            raise HTTPException(status_code=404, detail="Job no encontrado")
+        
+        # Actualizar registro con resultados finales
+        if status == "completed":
+            processing_record.notes = f"VIDEO IA REGISTRO - COMPLETED - " \
+                f"Detectado: {results_dict.get('detected_brand')} {results_dict.get('detected_model')} - " \
+                f"Confianza: {results_dict.get('confidence_scores', {}).get('overall', 0)*100:.1f}%"
+        else:
+            processing_record.notes = f"VIDEO IA REGISTRO - FAILED - " \
+                f"Error: {results_dict.get('error_message', 'Error desconocido')}"
+        
+        db.commit()
+        
+        return {"status": "callback_received", "job_id": job_id}
+        
+    except Exception as e:
+        logger.error(f"Error en callback job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

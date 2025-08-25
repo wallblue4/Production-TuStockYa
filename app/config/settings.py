@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     VIDEO_MICROSERVICE_URL: str = os.getenv("VIDEO_MICROSERVICE_URL", "http://localhost:8000")
     VIDEO_MICROSERVICE_API_KEY: Optional[str] = None
+
     
     # SSL para PostgreSQL en producción
     @property
@@ -47,5 +48,6 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = 'ignore'
 
 settings = Settings()
