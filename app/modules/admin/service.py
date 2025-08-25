@@ -140,6 +140,7 @@ class AdminService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error creando usuario y asignación: {str(e)}"
             )
+            
     async def _validate_location_access(
         self, 
         admin: User, 
@@ -1202,6 +1203,41 @@ class AdminService:
                 status_code=502, 
                 detail=f"Error procesando video: {str(e)}"
             )
+    async def get_location_statistics(
+        self,
+        location_id: int,
+        start_date: date,
+        end_date: date,
+        admin: User
+    ) -> Dict[str, Any]:
+        """
+        Obtener estadísticas de ubicación con validación de permisos
+        """
+        
+        # ✅ Validar que el admin puede gestionar esta ubicación
+        location = await self._validate_location_access(
+            admin, 
+            location_id, 
+            "ver estadísticas"
+        )
+        
+        # Validar rango de fechas
+        if start_date > end_date:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Fecha inicio debe ser menor o igual a fecha fin"
+            )
+        
+        # Obtener estadísticas
+        stats = self.repository.get_location_stats(location_id, start_date, end_date)
+        
+        if not stats:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No se pudieron obtener estadísticas para {location.name}"
+            )
+        
+        return stats
     
     async def get_video_processing_status(self, job_id: int, admin: User) -> Dict[str, Any]:
         """Consultar estado de procesamiento"""

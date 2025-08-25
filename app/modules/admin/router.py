@@ -236,9 +236,29 @@ async def get_location_statistics(
 ):
     """
     Obtener estadísticas detalladas de una ubicación específica
+    
+    **VALIDACIONES AGREGADAS:**
+    - Solo puede ver estadísticas de ubicaciones bajo su control
+    - BOSS puede ver estadísticas de cualquier ubicación
+    - Validar rango de fechas válido
+    
+    **Estadísticas incluidas:**
+    - Ventas del período especificado
+    - Número de transacciones
+    - Productos disponibles en la ubicación
+    - Alertas de stock bajo
+    - Valor total del inventario
+    - Usuarios activos en la ubicación
+    - Ticket promedio
+    
+    **Casos de uso:**
+    - Dashboard de ubicación específica
+    - Análisis de performance por período
+    - Reportes de inventario por ubicación
+    - Métricas de ventas detalladas
     """
     service = AdminService(db)
-    return service.repository.get_location_stats(location_id, start_date, end_date)
+    return await service.get_location_statistics(location_id, start_date, end_date, current_user)
 
 # ==================== AD007 & AD008: CONFIGURAR COSTOS ====================
 

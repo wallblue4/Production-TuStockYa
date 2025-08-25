@@ -195,61 +195,78 @@ class AdminRepository:
     
     
     def get_location_stats(self, location_id: int, start_date: date, end_date: date) -> Dict[str, Any]:
-        """Obtener estadísticas de una ubicación"""
+        """Obtener estadísticas de una ubicación - CORREGIDO"""
         
         location = self.db.query(Location).filter(Location.id == location_id).first()
         if not location:
             return {}
         
-        # Ventas del período
-        sales_query = self.db.query(func.sum(Sale.total_amount), func.count(Sale.id))\
-            .filter(
-                Sale.location_id == location_id,
-                func.date(Sale.sale_date) >= start_date,
-                func.date(Sale.sale_date) <= end_date
-            ).first()
+        try:
+            # Ventas del período
+            sales_query = self.db.query(func.sum(Sale.total_amount), func.count(Sale.id))\
+                .filter(
+                    Sale.location_id == location_id,
+                    func.date(Sale.sale_date) >= start_date,
+                    func.date(Sale.sale_date) <= end_date
+                ).first()
+            
+            total_sales = sales_query[0] or Decimal('0')
+            total_transactions = sales_query[1] or 0
+            
+            # ✅ CORREGIDO: Usar location_name en lugar de location_id
+            products_count = self.db.query(func.count(Product.id))\
+                .filter(Product.location_name == location.name, Product.is_active == 1).scalar() or 0
+            
+            # Stock bajo usando location_name
+            low_stock_count = self.db.query(func.count(ProductSize.id))\
+                .join(Product, Product.id == ProductSize.product_id)\
+                .filter(
+                    Product.location_name == location.name,
+                    ProductSize.quantity < 5,
+                    ProductSize.quantity > 0,
+                    Product.is_active == 1
+                ).scalar() or 0
+            
+            # Valor total del inventario
+            inventory_value = self.db.query(func.sum(Product.unit_price * Product.total_quantity))\
+                .filter(Product.location_name == location.name, Product.is_active == 1).scalar() or Decimal('0')
+            
+            # Usuarios activos en la ubicación
+            active_users_count = self.db.query(func.count(User.id))\
+                .filter(User.location_id == location_id, User.is_active == True).scalar() or 0
+            
+            return {
+                "location_id": location.id,
+                "location_name": location.name,
+                "location_type": location.type,
+                "period_start": start_date,
+                "period_end": end_date,
+                "daily_sales": total_sales,
+                "total_transactions": total_transactions,
+                "total_products": products_count,
+                "low_stock_alerts": low_stock_count,
+                "inventory_value": float(inventory_value),
+                "active_users": active_users_count,
+                "average_ticket": float(total_sales / total_transactions) if total_transactions > 0 else 0.0
+            }
         
-        total_sales = sales_query[0] or Decimal('0')
-        total_transactions = sales_query[1] or 0
-        
-        # Productos en ubicación
-        products_count = self.db.query(func.count(Product.id))\
-            .filter(Product.location_id == location_id, Product.is_active == 1).scalar()
-        
-        # Stock bajo (ejemplo: menos de 5 unidades)
-        low_stock_count = self.db.query(func.count(ProductSize.id))\
-            .join(Product, Product.id == ProductSize.product_id)\
-            .filter(
-                Product.location_id == location_id,
-                ProductSize.quantity < 5,
-                ProductSize.quantity > 0
-            ).scalar()
-        
-        # Transferencias pendientes
-        pending_transfers = self.db.query(func.count(TransferRequest.id))\
-            .filter(
-                or_(
-                    TransferRequest.source_location_id == location_id,
-                    TransferRequest.destination_location_id == location_id
-                ),
-                TransferRequest.status.in_(["pending", "accepted", "in_transit"])
-            ).scalar()
-        
-        # Usuarios activos
-        active_users = self.db.query(func.count(User.id))\
-            .filter(User.location_id == location_id, User.is_active == True).scalar()
-        
-        return {
-            "location_id": location_id,
-            "location_name": location.name,
-            "location_type": location.type,
-            "daily_sales": total_sales,
-            "monthly_sales": total_sales,  # Simplificado
-            "total_products": products_count,
-            "low_stock_alerts": low_stock_count,
-            "pending_transfers": pending_transfers,
-            "active_users": active_users
-        }
+        except Exception as e:
+            print(f"Error calculando estadísticas para ubicación {location_id}: {e}")
+            # Devolver estructura básica en caso de error
+            return {
+                "location_id": location.id,
+                "location_name": location.name,
+                "location_type": location.type,
+                "period_start": start_date,
+                "period_end": end_date,
+                "daily_sales": Decimal('0'),
+                "total_transactions": 0,
+                "total_products": 0,
+                "low_stock_alerts": 0,
+                "inventory_value": 0.0,
+                "active_users": 0,
+                "average_ticket": 0.0
+            }
     
     # ==================== COSTOS OPERATIVOS ====================
     
