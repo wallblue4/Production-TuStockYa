@@ -262,30 +262,42 @@ async def get_location_statistics(
 
 # ==================== AD007 & AD008: CONFIGURAR COSTOS ====================
 
-@router.post("/costs", response_model=CostResponse)
-async def configure_operational_cost(
-    cost_config: CostConfiguration,
+@router.get("/costs", response_model=List[CostResponse])
+async def get_cost_configurations(
+    location_id: Optional[int] = Query(None, description="Filtrar por ubicación"),
+    cost_type: Optional[CostType] = Query(None, description="Filtrar por tipo de costo"),
     current_user: User = Depends(require_roles(["administrador", "boss"])),
     db: Session = Depends(get_db)
 ):
     """
-    AD007: Configurar costos fijos (arriendo, servicios, nómina)
-    AD008: Configurar costos variables (mercancía, comisiones)
+    Obtener configuraciones de costos
+    
+    **VALIDACIONES AGREGADAS:**
+    - Solo puede ver costos de ubicaciones bajo su control
+    - BOSS puede ver costos de todas las ubicaciones
+    - Validar acceso a ubicación específica si se especifica
     
     **Funcionalidad:**
-    - Configurar costos fijos: arriendo, servicios públicos, nómina
-    - Configurar costos variables: mercancía, comisiones, transporte
-    - Establecer frecuencia de costos (mensual, semanal, diario)
-    - Asociar costos a ubicaciones específicas
+    - Ver todos los costos configurados
+    - Filtrar por ubicación específica
+    - Filtrar por tipo de costo (arriendo, servicios, etc.)
+    - Información completa: monto, frecuencia, quién lo configuró
     
     **Casos de uso:**
-    - Nuevo local requiere configuración de arriendo mensual
-    - Actualizar tarifas de servicios públicos
-    - Configurar comisiones por ventas
-    - Establecer costos de transporte entre ubicaciones
+    - Dashboard de costos operativos
+    - Análisis de gastos por ubicación
+    - Auditoría de configuraciones de costos
+    - Planificación presupuestaria
     """
     service = AdminService(db)
-    return await service.configure_cost(cost_config, current_user)
+    
+    cost_type_value = cost_type.value if cost_type else None
+    
+    return await service.get_cost_configurations(
+        admin=current_user,
+        location_id=location_id,
+        cost_type=cost_type_value
+    )
 
 @router.get("/costs", response_model=List[CostResponse])
 async def get_cost_configurations(

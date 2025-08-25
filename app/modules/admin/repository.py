@@ -299,9 +299,15 @@ class AdminRepository:
         }
     
     def get_cost_configurations(self, location_id: int) -> List[Dict[str, Any]]:
-        """Obtener configuraciones de costo por ubicación"""
+        """Obtener configuraciones de costo por ubicación - CORREGIDO"""
         
-        costs = self.db.query(Expense)\
+        location = self.db.query(Location).filter(Location.id == location_id).first()
+        if not location:
+            return []
+        
+        # Obtener costos de la ubicación (usando expenses como almacenamiento temporal)
+        costs_expenses = self.db.query(Expense)\
+            .join(User, Expense.user_id == User.id)\
             .filter(
                 Expense.location_id == location_id,
                 Expense.concept.like("CONFIG_%")
@@ -309,16 +315,40 @@ class AdminRepository:
             .order_by(desc(Expense.expense_date))\
             .all()
         
-        return [
-            {
-                "id": cost.id,
-                "cost_type": cost.concept.replace("CONFIG_", "").lower(),
-                "amount": cost.amount,
-                "description": cost.notes,
-                "effective_date": cost.expense_date,
-                "created_by": cost.user.full_name if cost.user else "Unknown"
-            } for cost in costs
-        ]
+        cost_responses = []
+        for expense in costs_expenses:
+            # Extraer información del campo notes
+            notes = expense.notes or ""
+            
+            # Extraer cost_type del concept (CONFIG_ARRIENDO -> arriendo)
+            cost_type = expense.concept.replace("CONFIG_", "").lower()
+            
+            # Extraer frequency de las notes (buscar "Frecuencia: X")
+            frequency = "mensual"  # Default
+            if "Frecuencia:" in notes:
+                freq_part = notes.split("Frecuencia:")[1].split("-")[0].strip()
+                frequency = freq_part
+            
+            # Extraer description
+            description_parts = notes.split(" - ")
+            description = description_parts[0] if description_parts else f"Costo de {cost_type}"
+            
+            cost_responses.append({
+                "id": expense.id,
+                "location_id": location.id,
+                "location_name": location.name,
+                "cost_type": cost_type,
+                "amount": expense.amount,
+                "frequency": frequency,
+                "description": description,
+                "is_active": True,  # Asumimos que todos están activos
+                "effective_date": expense.expense_date,
+                "created_by_user_id": expense.user_id,
+                "created_by_name": expense.user.full_name,
+                "created_at": expense.expense_date
+            })
+        
+        return cost_responses
     
     # ==================== VENTAS AL POR MAYOR ====================
     
