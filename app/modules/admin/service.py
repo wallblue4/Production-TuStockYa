@@ -19,7 +19,9 @@ from fastapi import APIRouter, Depends, Query, File, UploadFile, Form
 from app.config.settings import settings
 from .repository import AdminRepository
 from .schemas import *
-from app.shared.database.models import User, Location ,AdminLocationAssignment , Product ,InventoryChange
+
+from app.shared.database.models import User, Location ,AdminLocationAssignment , Product ,InventoryChange ,DiscountRequest
+
 
 class AdminService:
     """
@@ -946,12 +948,11 @@ class AdminService:
             
             discount_responses.append(DiscountRequestResponse(
                 id=req.id,
-                # ❌ ELIMINAR: sale_id=req.sale_id,  # No existe este campo
                 requester_user_id=req.seller_id,
                 requester_name=seller.full_name if seller else "Usuario desconocido",
                 location_id=seller.location_id if seller else None,
                 location_name=seller.location.name if seller and seller.location else None,
-                original_amount=req.amount,  # ✅ CORREGIDO: usar amount
+                original_amount=req.amount,  
                 discount_amount=req.amount,   # Mismo valor que el monto solicitado
                 discount_percentage=None,     # No calculado en este modelo
                 reason=req.reason,
