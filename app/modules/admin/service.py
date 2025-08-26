@@ -1185,7 +1185,7 @@ class AdminService:
         # Validar bodega existe
         warehouse = self.db.query(Location).filter(
             Location.id == video_entry.warehouse_location_id,
-            Location.location_type == "bodega"
+            Location.type == "bodega"
         ).first()
         
         if not warehouse:
