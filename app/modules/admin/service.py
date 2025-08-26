@@ -1177,12 +1177,15 @@ class AdminService:
         admin: User
     ) -> VideoProcessingResponse:
         """
-        AD016: Procesamiento REAL de video con microservicio de IA
+        AD016: Procesamiento de video con IA - VERSIÓN CON TABLA DEDICADA
         """
+        from app.shared.database.models import VideoProcessingJob, Location
+        import json
+        
         # Validar bodega existe
         warehouse = self.db.query(Location).filter(
             Location.id == video_entry.warehouse_location_id,
-            Location.type == "bodega"
+            Location.location_type == "bodega"
         ).first()
         
         if not warehouse:
@@ -1196,74 +1199,160 @@ class AdminService:
         # Crear directorio si no existe
         os.makedirs("uploads/inventory_videos", exist_ok=True)
         
-        # Guardar archivo localmente (temporal)
+        # Guardar archivo localmente
+        file_content = await video_file.read()
         with open(video_path, "wb") as buffer:
-            content = await video_file.read()
-            buffer.write(content)
+            buffer.write(file_content)
         
-        # Crear registro inicial en BD
-        processing_record = InventoryChange(
-            product_id=None,  # Se establecerá después del procesamiento
-            change_type="video_ai_training",
-            quantity_before=0,
-            quantity_after=video_entry.estimated_quantity,
-            user_id=admin.id,
-            notes=f"VIDEO IA REGISTRO - Bodega: {warehouse.name} - Archivo: {unique_filename} - "
-                  f"Status: PROCESSING"
+        # 🆕 CREAR REGISTRO EN TABLA DEDICADA
+        processing_job = VideoProcessingJob(
+            video_file_path=video_path,
+            original_filename=video_file.filename,
+            file_size_bytes=len(file_content),
+            warehouse_location_id=warehouse.id,
+            estimated_quantity=video_entry.estimated_quantity,
+            product_brand=video_entry.product_brand,
+            product_model=video_entry.product_model,
+            expected_sizes=json.dumps(video_entry.expected_sizes) if video_entry.expected_sizes else None,
+            notes=video_entry.notes,
+            processing_status="processing",
+            processed_by_user_id=admin.id,
+            processing_started_at=datetime.now()
         )
         
-        self.db.add(processing_record)
+        self.db.add(processing_job)
         self.db.commit()
-        self.db.refresh(processing_record)
+        self.db.refresh(processing_job)
         
         # 🆕 PROCESAMIENTO REAL CON MICROSERVICIO
         try:
             ai_result = await self._process_video_with_microservice(
                 video_path, 
                 video_entry, 
-                processing_record.id,
+                processing_job.id,
                 admin.id
             )
             
-            # Actualizar registro con resultados
-            processing_record.notes = f"VIDEO IA REGISTRO - COMPLETED - {ai_result.get('summary', 'Procesado exitosamente')}"
-            self.db.commit()
+            # Actualizar job con resultados
+            processing_job.processing_status = "completed"
+            processing_job.processing_completed_at = datetime.now()
+            processing_job.ai_results_json = json.dumps(ai_result)
+            processing_job.confidence_score = ai_result.get("confidence_scores", {}).get("overall", 0.0)
+            processing_job.detected_brand = ai_result.get("detected_brand")
+            processing_job.detected_model = ai_result.get("detected_model")
+            processing_job.detected_colors = json.dumps(ai_result.get("detected_colors", []))
+            processing_job.detected_sizes = json.dumps(ai_result.get("detected_sizes", []))
+            
+            # 🆕 CREAR PRODUCTO FINAL Y REGISTRO DE INVENTARIO
+            final_product_id, inventory_change_id = await self._create_final_product_and_inventory(
+                processing_job, ai_result, warehouse, admin
+            )
+            
+            processing_job.created_product_id = final_product_id
+            processing_job.created_inventory_change_id = inventory_change_id
             
             status = "completed"
             
         except Exception as e:
-            # Actualizar registro con error
-            processing_record.notes = f"VIDEO IA REGISTRO - ERROR - {str(e)}"
-            self.db.commit()
+            # Actualizar job con error
+            processing_job.processing_status = "failed"
+            processing_job.processing_completed_at = datetime.now()
+            processing_job.error_message = str(e)
+            processing_job.retry_count += 1
             
             status = "failed"
-            ai_result = {
-                "error_message": str(e),
-                "detected_brand": "Error",
-                "detected_model": "Error"
-            }
+            ai_result = {"error_message": str(e)}
         
+        self.db.commit()
+        
+        # Construir respuesta
         return VideoProcessingResponse(
-            id=processing_record.id,
-            video_file_path=video_path,
-            warehouse_location_id=warehouse.id,
+            id=processing_job.id,
+            video_file_path=processing_job.video_file_path,
+            warehouse_location_id=processing_job.warehouse_location_id,
             warehouse_name=warehouse.name,
-            estimated_quantity=video_entry.estimated_quantity,
+            estimated_quantity=processing_job.estimated_quantity,
             processing_status=status,
-            ai_extracted_info=ai_result,
+            ai_extracted_info=json.loads(processing_job.ai_results_json) if processing_job.ai_results_json else ai_result,
             detected_products=[{
-                "brand": ai_result.get("detected_brand", "Unknown"),
-                "model": ai_result.get("detected_model", "Unknown"),
-                "confidence": ai_result.get("confidence_scores", {}).get("overall", 0.0)
+                "brand": processing_job.detected_brand or "Unknown",
+                "model": processing_job.detected_model or "Unknown",
+                "colors": json.loads(processing_job.detected_colors) if processing_job.detected_colors else [],
+                "sizes": json.loads(processing_job.detected_sizes) if processing_job.detected_sizes else [],
+                "confidence": float(processing_job.confidence_score) if processing_job.confidence_score else 0.0
             }] if status == "completed" else [],
-            confidence_score=ai_result.get("confidence_scores", {}).get("overall", 0.0),
-            processed_by_user_id=admin.id,
+            confidence_score=float(processing_job.confidence_score) if processing_job.confidence_score else 0.0,
+            processed_by_user_id=processing_job.processed_by_user_id,
             processed_by_name=admin.full_name,
-            processing_started_at=processing_record.created_at,
-            processing_completed_at=datetime.now(),
-            error_message=ai_result.get("error_message"),
-            notes=video_entry.notes
+            processing_started_at=processing_job.processing_started_at,
+            processing_completed_at=processing_job.processing_completed_at,
+            error_message=processing_job.error_message,
+            notes=processing_job.notes
         )
+
+    async def _create_final_product_and_inventory(
+        self, 
+        processing_job: VideoProcessingJob, 
+        ai_result: Dict[str, Any], 
+        warehouse: Location, 
+        admin: User
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Crear producto final e inventory change tras procesamiento exitoso
+        """
+        from app.shared.database.models import Product, ProductSize, InventoryChange
+        import json
+        
+        try:
+            # Crear producto final
+            reference_code = ai_result.get("recommended_reference_code") or f"{processing_job.detected_brand[:3].upper()}-{processing_job.detected_model[:4].upper()}-{processing_job.id}"
+            
+            final_product = Product(
+                reference_code=reference_code,
+                description=f"{processing_job.detected_brand} {processing_job.detected_model}",
+                brand=processing_job.detected_brand,
+                model=processing_job.detected_model,
+                color_info=", ".join(json.loads(processing_job.detected_colors)) if processing_job.detected_colors else None,
+                location_name=warehouse.name,
+                total_quantity=processing_job.estimated_quantity,
+                is_active=1
+            )
+            
+            self.db.add(final_product)
+            self.db.flush()  # Para obtener el ID
+            
+            # Crear tallas
+            detected_sizes = json.loads(processing_job.detected_sizes) if processing_job.detected_sizes else []
+            if detected_sizes:
+                quantity_per_size = processing_job.estimated_quantity // len(detected_sizes)
+                for size in detected_sizes:
+                    product_size = ProductSize(
+                        product_id=final_product.id,
+                        size=size,
+                        quantity=quantity_per_size,
+                        location_name=warehouse.name
+                    )
+                    self.db.add(product_size)
+            
+            # Crear inventory change final
+            inventory_change = InventoryChange(
+                product_id=final_product.id,
+                change_type="video_ai_creation",
+                quantity_before=0,
+                quantity_after=processing_job.estimated_quantity,
+                user_id=admin.id,
+                notes=f"Producto creado via IA - Video: {processing_job.original_filename} - Confianza: {processing_job.confidence_score*100:.1f}%",
+                created_at=datetime.now()
+            )
+            
+            self.db.add(inventory_change)
+            self.db.flush()
+            
+            return final_product.id, inventory_change.id
+            
+        except Exception as e:
+            self.db.rollback()
+            raise Exception(f"Error creando producto final: {str(e)}")
     
     async def _process_video_with_microservice(
         self, 
@@ -1454,92 +1543,105 @@ class AdminService:
         admin_user: User
     ) -> List[VideoProcessingResponse]:
         """
-        Obtener historial de videos procesados
+        Obtener historial de videos procesados - USANDO TABLA DEDICADA
         """
-        # En producción, esto consultaría una tabla específica de videos
-        # Por ahora, usamos inventory_changes con change_type="video_ai_training"
+        from app.shared.database.models import VideoProcessingJob, Location, User
+        import json
         
-        from app.shared.database.models import InventoryChange, Location
+        query = self.db.query(VideoProcessingJob, Location, User)\
+            .join(Location, VideoProcessingJob.warehouse_location_id == Location.id)\
+            .join(User, VideoProcessingJob.processed_by_user_id == User.id)
         
-        query = self.db.query(InventoryChange, Location)\
-            .join(Location, InventoryChange.user_id == admin_user.id)\
-            .filter(InventoryChange.change_type == "video_ai_training")
+        # Filtros
+        if status:
+            query = query.filter(VideoProcessingJob.processing_status == status)
+        
+        if warehouse_id:
+            query = query.filter(VideoProcessingJob.warehouse_location_id == warehouse_id)
         
         if date_from:
-            query = query.filter(InventoryChange.created_at >= date_from)
+            query = query.filter(VideoProcessingJob.created_at >= date_from)
         
         if date_to:
-            query = query.filter(InventoryChange.created_at <= date_to)
+            query = query.filter(VideoProcessingJob.created_at <= date_to)
+        
+        # Ordenar por más recientes primero
+        query = query.order_by(VideoProcessingJob.created_at.desc())
         
         records = query.limit(limit).all()
         
-        # Simular respuestas
+        # Construir respuestas
         results = []
-        for record, location in records:
+        for job, location, user in records:
             results.append(VideoProcessingResponse(
-                id=record.id,
-                video_file_path=f"uploads/inventory_videos/video_{record.id}.mp4",
-                warehouse_location_id=location.id,
+                id=job.id,
+                video_file_path=job.video_file_path,
+                warehouse_location_id=job.warehouse_location_id,
                 warehouse_name=location.name,
-                estimated_quantity=record.quantity_after,
-                processing_status="completed",
-                ai_extracted_info={},
-                detected_products=[],
-                confidence_score=0.87,
-                processed_by_user_id=record.user_id,
-                processed_by_name=admin_user.full_name,
-                processing_started_at=record.created_at,
-                processing_completed_at=record.created_at,
-                error_message=None,
-                notes=record.notes
+                estimated_quantity=job.estimated_quantity,
+                processing_status=job.processing_status,
+                ai_extracted_info=json.loads(job.ai_results_json) if job.ai_results_json else {},
+                detected_products=[{
+                    "brand": job.detected_brand,
+                    "model": job.detected_model,
+                    "colors": json.loads(job.detected_colors) if job.detected_colors else [],
+                    "sizes": json.loads(job.detected_sizes) if job.detected_sizes else [],
+                    "confidence": float(job.confidence_score) if job.confidence_score else 0.0
+                }] if job.processing_status == "completed" else [],
+                confidence_score=float(job.confidence_score) if job.confidence_score else 0.0,
+                processed_by_user_id=job.processed_by_user_id,
+                processed_by_name=user.full_name,
+                processing_started_at=job.processing_started_at,
+                processing_completed_at=job.processing_completed_at,
+                error_message=job.error_message,
+                notes=job.notes
             ))
         
         return results
     
     async def get_video_processing_details(self, video_id: int, admin_user: User) -> VideoProcessingResponse:
         """
-        Obtener detalles específicos de video procesado
+        Obtener detalles específicos de video procesado - USANDO TABLA DEDICADA
         """
-        from app.shared.database.models import InventoryChange
+        from app.shared.database.models import VideoProcessingJob, Location, User
+        import json
         
-        record = self.db.query(InventoryChange)\
-            .filter(
-                InventoryChange.id == video_id,
-                InventoryChange.change_type == "video_ai_training"
-            ).first()
+        # Buscar el job específico
+        query = self.db.query(VideoProcessingJob, Location, User)\
+            .join(Location, VideoProcessingJob.warehouse_location_id == Location.id)\
+            .join(User, VideoProcessingJob.processed_by_user_id == User.id)\
+            .filter(VideoProcessingJob.id == video_id)
         
-        if not record:
+        result = query.first()
+        
+        if not result:
             raise HTTPException(status_code=404, detail="Video no encontrado")
         
-        # Simular respuesta detallada
+        job, location, user = result
+        
+        # Construir respuesta detallada
         return VideoProcessingResponse(
-            id=record.id,
-            video_file_path=f"uploads/inventory_videos/video_{record.id}.mp4",
-            warehouse_location_id=1,  # Se obtendría de la relación
-            warehouse_name="Bodega Central",
-            estimated_quantity=record.quantity_after,
-            processing_status="completed",
-            ai_extracted_info={
-                "detected_brand": "Nike",
-                "detected_model": "Air Max 270",
-                "detected_colors": ["Negro", "Blanco"],
-                "detected_sizes": ["40", "41", "42", "43"],
-                "confidence_scores": {"overall": 0.92}
-            },
+            id=job.id,
+            video_file_path=job.video_file_path,
+            warehouse_location_id=job.warehouse_location_id,
+            warehouse_name=location.name,
+            estimated_quantity=job.estimated_quantity,
+            processing_status=job.processing_status,
+            ai_extracted_info=json.loads(job.ai_results_json) if job.ai_results_json else {},
             detected_products=[{
-                "brand": "Nike",
-                "model": "Air Max 270", 
-                "colors": ["Negro", "Blanco"],
-                "sizes": ["40", "41", "42", "43"],
-                "confidence": 0.92
-            }],
-            confidence_score=0.92,
-            processed_by_user_id=record.user_id,
-            processed_by_name=admin_user.full_name,
-            processing_started_at=record.created_at,
-            processing_completed_at=record.created_at,
-            error_message=None,
-            notes=record.notes
+                "brand": job.detected_brand,
+                "model": job.detected_model,
+                "colors": json.loads(job.detected_colors) if job.detected_colors else [],
+                "sizes": json.loads(job.detected_sizes) if job.detected_sizes else [],
+                "confidence": float(job.confidence_score) if job.confidence_score else 0.0
+            }] if job.processing_status == "completed" and job.detected_brand else [],
+            confidence_score=float(job.confidence_score) if job.confidence_score else 0.0,
+            processed_by_user_id=job.processed_by_user_id,
+            processed_by_name=user.full_name,
+            processing_started_at=job.processing_started_at,
+            processing_completed_at=job.processing_completed_at,
+            error_message=job.error_message,
+            notes=job.notes
         )
 
     def require_location_access(location_param: str = "location_id", action: str = "gestionar"):

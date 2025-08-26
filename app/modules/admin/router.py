@@ -1174,33 +1174,52 @@ async def video_processing_callback(
     db: Session = Depends(get_db)
 ):
     """
-    Callback para recibir resultados del microservicio de video
+    Callback para recibir resultados del microservicio de video - USANDO TABLA DEDICADA
     """
+    from app.shared.database.models import VideoProcessingJob
+    import json
+    
     try:
         # Parsear resultados
         results_dict = json.loads(results)
         
-        # Buscar el registro en BD
-        processing_record = db.query(InventoryChange).filter(
-            InventoryChange.id == job_id
+        # Buscar el job en la nueva tabla
+        processing_job = db.query(VideoProcessingJob).filter(
+            VideoProcessingJob.id == job_id
         ).first()
         
-        if not processing_record:
+        if not processing_job:
             raise HTTPException(status_code=404, detail="Job no encontrado")
         
-        # Actualizar registro con resultados finales
+        # Actualizar job con resultados finales
+        processing_job.processing_status = status
+        processing_job.processing_completed_at = datetime.now()
+        
         if status == "completed":
-            processing_record.notes = f"VIDEO IA REGISTRO - COMPLETED - " \
-                f"Detectado: {results_dict.get('detected_brand')} {results_dict.get('detected_model')} - " \
-                f"Confianza: {results_dict.get('confidence_scores', {}).get('overall', 0)*100:.1f}%"
+            # Actualizar con resultados exitosos
+            processing_job.ai_results_json = results
+            processing_job.confidence_score = results_dict.get('confidence_scores', {}).get('overall', 0.0)
+            processing_job.detected_brand = results_dict.get('detected_brand')
+            processing_job.detected_model = results_dict.get('detected_model')
+            processing_job.detected_colors = json.dumps(results_dict.get('detected_colors', []))
+            processing_job.detected_sizes = json.dumps(results_dict.get('detected_sizes', []))
+            processing_job.frames_extracted = results_dict.get('frames_processed', 0)
+            processing_job.processing_time_seconds = results_dict.get('processing_time', 0)
+            
+            logger.info(f"✅ Video job {job_id} completed successfully")
+            
         else:
-            processing_record.notes = f"VIDEO IA REGISTRO - FAILED - " \
-                f"Error: {results_dict.get('error_message', 'Error desconocido')}"
+            # Actualizar con error
+            processing_job.error_message = results_dict.get('error_message', 'Error desconocido')
+            processing_job.retry_count += 1
+            
+            logger.error(f"❌ Video job {job_id} failed: {processing_job.error_message}")
         
         db.commit()
         
-        return {"status": "callback_received", "job_id": job_id}
+        return {"status": "callback_received", "job_id": job_id, "updated": True}
         
     except Exception as e:
-        logger.error(f"Error en callback job {job_id}: {e}")
+        logger.error(f"❌ Error en callback job {job_id}: {e}")
+        db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
