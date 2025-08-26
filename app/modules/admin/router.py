@@ -1223,3 +1223,130 @@ async def video_processing_callback(
         logger.error(f"❌ Error en callback job {job_id}: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# app/modules/admin/router.py - AGREGAR ESTE ENDPOINT DE DIAGNÓSTICO
+
+@router.get("/diagnosis/microservice-connection")
+async def test_microservice_connection(
+    current_user: User = Depends(require_roles(["administrador", "boss"])),
+    db: Session = Depends(get_db)
+):
+    """
+    🔬 DIAGNÓSTICO: Probar conexión con microservicio
+    """
+    import httpx
+    from app.config.settings import settings
+    
+    diagnosis = {
+        "timestamp": datetime.now().isoformat(),
+        "microservice_url": getattr(settings, 'VIDEO_PROCESSING_SERVICE_URL', 'NOT_CONFIGURED'),
+        "api_key_configured": bool(getattr(settings, 'VIDEO_PROCESSING_API_KEY', None)),
+        "tests": {}
+    }
+    
+    # Test 1: Health check del microservicio
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            headers = {}
+            if hasattr(settings, 'VIDEO_PROCESSING_API_KEY') and settings.VIDEO_PROCESSING_API_KEY:
+                headers["Authorization"] = f"Bearer {settings.VIDEO_PROCESSING_API_KEY}"
+            
+            response = await client.get(
+                f"{settings.VIDEO_PROCESSING_SERVICE_URL}/health",
+                headers=headers
+            )
+            
+            diagnosis["tests"]["health_check"] = {
+                "status": "✅ SUCCESS" if response.status_code == 200 else "❌ FAILED",
+                "status_code": response.status_code,
+                "response": response.json() if response.status_code == 200 else response.text,
+                "response_time_ms": response.elapsed.total_seconds() * 1000
+            }
+    except Exception as e:
+        diagnosis["tests"]["health_check"] = {
+            "status": "❌ ERROR",
+            "error": str(e)
+        }
+    
+    # Test 2: Endpoint de procesamiento (sin archivo)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            headers = {"Authorization": f"Bearer {settings.VIDEO_PROCESSING_API_KEY}"} if hasattr(settings, 'VIDEO_PROCESSING_API_KEY') else {}
+            
+            response = await client.post(
+                f"{settings.VIDEO_PROCESSING_SERVICE_URL}/api/v1/process-video",
+                data={
+                    "job_id": 999,
+                    "callback_url": "https://test.com/callback",
+                    "metadata": "{\"test\": true}"
+                },
+                headers=headers
+            )
+            
+            diagnosis["tests"]["process_endpoint"] = {
+                "status": "✅ ACCESSIBLE" if response.status_code in [400, 422] else "❌ UNEXPECTED",
+                "status_code": response.status_code,
+                "expected": "422 (validation error without video file)",
+                "response": response.text[:200] if response.text else "No response"
+            }
+    except Exception as e:
+        diagnosis["tests"]["process_endpoint"] = {
+            "status": "❌ ERROR",
+            "error": str(e)
+        }
+    
+    return 
+    
+@router.get("/diagnosis/job-logs/{job_id}")
+async def get_job_logs(
+    job_id: int,
+    current_user: User = Depends(require_roles(["administrador", "boss"])),
+    db: Session = Depends(get_db)
+):
+    """
+    🔬 DIAGNÓSTICO: Ver logs detallados de un job
+    """
+    from app.shared.database.models import VideoProcessingJob
+    
+    job = db.query(VideoProcessingJob).filter(VideoProcessingJob.id == job_id).first()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+    
+    # Información detallada del job
+    job_info = {
+        "job_id": job.id,
+        "status": job.processing_status,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.processing_started_at.isoformat() if job.processing_started_at else None,
+        "completed_at": job.processing_completed_at.isoformat() if job.processing_completed_at else None,
+        "processing_time_seconds": None,
+        "video_file": {
+            "path": job.video_file_path,
+            "original_name": job.original_filename,
+            "size_bytes": job.file_size_bytes,
+            "exists": os.path.exists(job.video_file_path) if job.video_file_path else False
+        },
+        "microservice_info": {
+            "job_id": job.microservice_job_id,
+            "callback_received": job.processing_completed_at is not None
+        },
+        "error_info": {
+            "error_message": job.error_message,
+            "retry_count": job.retry_count
+        },
+        "ai_results": {
+            "has_results": bool(job.ai_results_json),
+            "confidence_score": float(job.confidence_score) if job.confidence_score else 0,
+            "detected_brand": job.detected_brand,
+            "detected_model": job.detected_model
+        }
+    }
+    
+    # Calcular tiempo de procesamiento
+    if job.processing_started_at and job.processing_completed_at:
+        delta = job.processing_completed_at - job.processing_started_at
+        job_info["processing_time_seconds"] = delta.total_seconds()
+    
+    return job_info
