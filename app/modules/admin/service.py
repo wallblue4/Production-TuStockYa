@@ -2,7 +2,7 @@
 import json
 import asyncio
 from datetime import datetime, timedelta, date
-from typing import List, Optional, Dict, Any , Callable, Union
+from typing import List, Optional, Dict, Any , Callable, Union , Tuple
 from fastapi import HTTPException, status ,UploadFile
 from sqlalchemy import func 
 from sqlalchemy.orm import Session
@@ -20,7 +20,7 @@ from app.config.settings import settings
 from .repository import AdminRepository
 from .schemas import *
 
-from app.shared.database.models import User, Location ,AdminLocationAssignment , Product ,InventoryChange ,DiscountRequest
+from app.shared.database.models import User, Location ,AdminLocationAssignment , Product ,InventoryChange ,DiscountRequest , VideoProcessingJob
 
 
 class AdminService:

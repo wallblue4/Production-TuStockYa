@@ -387,47 +387,6 @@ class TransportIncident(Base):
     transfer_request = relationship("TransferRequest")
     courier = relationship("User")
 
-# app/shared/database/models.py - AGREGAR al final
-class VideoProcessingJob(Base):
-    """Tabla para tracking de jobs de procesamiento de video"""
-    __tablename__ = "video_processing_jobs"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    job_id = Column(String(50), unique=True, nullable=False, index=True)
-    
-    # Datos de input
-    warehouse_location_id = Column(Integer, ForeignKey("locations.id"), nullable=False)
-    estimated_quantity = Column(Integer, nullable=False)
-    product_brand = Column(String(255))
-    product_model = Column(String(255))
-    expected_sizes = Column(Text)  # JSON string de tallas
-    notes = Column(Text)
-    
-    # Estado del procesamiento
-    status = Column(String(50), default="submitted", index=True)  # submitted, processing, completed, failed
-    progress_percentage = Column(Integer, default=0)
-    
-    # Resultados
-    ai_results = Column(Text)  # JSON string
-    detected_products = Column(Text)  # JSON string
-    confidence_score = Column(Numeric(3, 2))
-    
-    # Productos creados
-    created_products = Column(Text)  # JSON string con IDs de productos creados
-    
-    # Tracking
-    submitted_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    submitted_at = Column(DateTime, server_default=func.current_timestamp())
-    processing_started_at = Column(DateTime)
-    processing_completed_at = Column(DateTime)
-    
-    # Error handling
-    error_message = Column(Text)
-    retry_count = Column(Integer, default=0)
-    
-    # Relationships
-    warehouse_location = relationship("Location")
-    submitted_by = relationship("User")
 
 class VideoProcessingJob(Base):
     """Tabla específica para jobs de procesamiento de video con IA"""
