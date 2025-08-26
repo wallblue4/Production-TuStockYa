@@ -428,3 +428,63 @@ class VideoProcessingJob(Base):
     # Relationships
     warehouse_location = relationship("Location")
     submitted_by = relationship("User")
+
+class VideoProcessingJob(Base):
+    """Tabla específica para jobs de procesamiento de video con IA"""
+    __tablename__ = "video_processing_jobs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Información del archivo
+    video_file_path = Column(String(500), nullable=False)
+    original_filename = Column(String(255))
+    file_size_bytes = Column(Integer)
+    
+    # Ubicación y cantidad
+    warehouse_location_id = Column(Integer, ForeignKey("locations.id"), nullable=False)
+    estimated_quantity = Column(Integer, nullable=False)
+    
+    # Información del producto esperado
+    product_brand = Column(String(255))
+    product_model = Column(String(255))
+    expected_sizes = Column(Text)  # JSON array: ["40", "41", "42"]
+    notes = Column(Text)
+    
+    # Estado del procesamiento
+    processing_status = Column(String(50), default="processing")  # processing, completed, failed
+    
+    # IA Results
+    ai_results_json = Column(Text)  # JSON con todos los resultados de IA
+    confidence_score = Column(Numeric(5, 4), default=0.0)  # 0.0000 - 1.0000
+    detected_brand = Column(String(255))
+    detected_model = Column(String(255))
+    detected_colors = Column(Text)  # JSON array
+    detected_sizes = Column(Text)   # JSON array
+    
+    # Metadatos del procesamiento
+    frames_extracted = Column(Integer)
+    processing_time_seconds = Column(Integer)
+    microservice_job_id = Column(String(100))  # ID del microservicio
+    
+    # Auditoría
+    processed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    processing_started_at = Column(DateTime)
+    processing_completed_at = Column(DateTime)
+    
+    # Manejo de errores
+    error_message = Column(Text)
+    retry_count = Column(Integer, default=0)
+    
+    # Resultados finales
+    created_product_id = Column(Integer, ForeignKey("products.id"))  # Producto creado tras procesamiento
+    created_inventory_change_id = Column(Integer, ForeignKey("inventory_changes.id"))  # Cambio de inventario final
+    
+    # Relationships
+    warehouse = relationship("Location")
+    processed_by = relationship("User")
+    created_product = relationship("Product")
+    created_inventory_change = relationship("InventoryChange")
+    
+    def __repr__(self):
+        return f"<VideoProcessingJob(id={self.id}, status={self.processing_status}, brand={self.detected_brand})>"
