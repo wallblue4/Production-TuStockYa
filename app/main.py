@@ -20,6 +20,7 @@ async def lifespan(app: FastAPI):
     
     yield
     
+    
     # Shutdown
     print("🛑 TuStockYa API Shutting down...")
 

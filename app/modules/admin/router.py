@@ -10,6 +10,12 @@ from app.core.auth.dependencies import get_current_user, require_roles
 from app.shared.database.models import User
 from .service import AdminService
 from .schemas import *
+import logging
+
+# Configuración básica del logger
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["Admin - Administrador"])
 

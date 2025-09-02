@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     debug: bool = False
     
     # Database - Configuración para Render
-    database_url: str = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    database_url: str = os.getenv("DATABASE_URL", "postgresql://tustockya:O23WBhBX6WzqJPZLuJOvixxduQfC1WI1@dpg-d1d3pc6mcj7s73fcs1o0-a.oregon-postgres.render.com/tustockya")
     redis_url: Optional[str] = None
     
     # Security
@@ -33,8 +33,13 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = int(os.getenv("PORT", 10000))
 
-    VIDEO_MICROSERVICE_URL: str = os.getenv("VIDEO_MICROSERVICE_URL", "http://localhost:8000")
-    VIDEO_MICROSERVICE_API_KEY: Optional[str] = None
+    VIDEO_MICROSERVICE_URL: str = os.getenv(
+        "VIDEO_MICROSERVICE_URL", 
+        "https://video-processing-microservice.onrender.com"  
+    )
+    VIDEO_MICROSERVICE_API_KEY: Optional[str] = os.getenv("VIDEO_MICROSERVICE_API_KEY","a7F!kP@8j#xT&z4cQv*bN2yM$wG6uH9eD0rL%sI3oU1tY_pA")
+    VIDEO_MICROSERVICE_TIMEOUT: int = int(os.getenv("VIDEO_MICROSERVICE_TIMEOUT", "300"))
+    BASE_URL: str = os.getenv("BASE_URL", "http://localhost:10000")
 
     
     # SSL para PostgreSQL en producción
