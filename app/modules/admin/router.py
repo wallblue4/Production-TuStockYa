@@ -11,6 +11,7 @@ from app.shared.database.models import User
 from .service import AdminService
 from .schemas import *
 import logging
+import json 
 
 # Configuración básica del logger
 logging.basicConfig(level=logging.INFO,
