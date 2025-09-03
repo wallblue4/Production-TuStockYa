@@ -1665,7 +1665,9 @@ class AdminService:
                 unit_price=Decimal('0.00'),
                 box_price=Decimal('0.00'),
                 total_quantity=processing_job.estimated_quantity,
-                is_active=1
+                is_active=1,
+                created_at=now,   
+                updated_at=now 
             )
             
             self.db.add(new_product)
@@ -1681,7 +1683,9 @@ class AdminService:
                     size=size,
                     quantity=quantity_per_size,
                     quantity_exhibition=0,
-                    location_name=warehouse.name if warehouse else "Unknown"
+                    location_name=warehouse.name if warehouse else "Unknown",
+                    created_at=now,    
+                    updated_at=now 
                 )
                 self.db.add(product_size)
             
