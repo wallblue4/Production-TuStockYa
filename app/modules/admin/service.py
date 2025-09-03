@@ -1618,6 +1618,94 @@ class AdminService:
         
         return results
     
+    async def _create_products_from_ai_results(
+        self, 
+        ai_results: Dict[str, Any], 
+        processing_job
+    ) -> List[Any]:
+        """
+        Crear productos reales en BD basado en resultados de IA
+        """
+        from app.shared.database.models import Product, ProductSize
+        import json
+        
+        created_products = []
+        
+        try:
+            # Obtener productos detectados
+            detected_products = ai_results.get("detected_products", [])
+            
+            if not detected_products:
+                logger.warning(f"No hay productos detectados para crear - Job {processing_job.id}")
+                return created_products
+            
+            # Usar el mejor producto detectado
+            best_product = detected_products[0]
+            
+            # Generar código de referencia
+            reference_code = self._generate_reference_code(
+                best_product.get('brand', 'Unknown'),
+                best_product.get('model_name', 'Unknown')
+            )
+            
+            # Obtener warehouse
+            from app.shared.database.models import Location
+            warehouse = self.db.query(Location).filter(
+                Location.id == processing_job.warehouse_location_id
+            ).first()
+            
+            # Crear producto
+            new_product = Product(
+                reference_code=reference_code,
+                description=f"{best_product.get('brand', 'Unknown')} {best_product.get('model_name', 'Unknown')}",
+                brand=best_product.get('brand', 'Unknown'),
+                model=best_product.get('model_name', 'Unknown'), 
+                color_info=best_product.get('color', 'Unknown'),
+                location_name=warehouse.name if warehouse else "Unknown",
+                unit_price=Decimal('0.00'),
+                box_price=Decimal('0.00'),
+                total_quantity=processing_job.estimated_quantity,
+                is_active=1
+            )
+            
+            self.db.add(new_product)
+            self.db.flush()  # Para obtener ID
+            
+            # Crear tallas (distribución equitativa)
+            sizes = ['7', '8', '9', '10', '11', '12']  # Tallas por defecto
+            quantity_per_size = processing_job.estimated_quantity // len(sizes)
+            
+            for size in sizes:
+                product_size = ProductSize(
+                    product_id=new_product.id,
+                    size=size,
+                    quantity=quantity_per_size,
+                    quantity_exhibition=0,
+                    location_name=warehouse.name if warehouse else "Unknown"
+                )
+                self.db.add(product_size)
+            
+            created_products.append(new_product)
+            
+            logger.info(f"✅ Producto creado: {reference_code} - {best_product.get('brand')} {best_product.get('model_name')}")
+            
+            return created_products
+            
+        except Exception as e:
+            logger.error(f"❌ Error creando productos: {e}")
+            self.db.rollback()
+            raise e
+
+    def _generate_reference_code(self, brand: str, model: str) -> str:
+        """Generar código de referencia único"""
+        import uuid
+        
+        brand_code = (brand or "UNK")[:3].upper()
+        model_code = (model or "MDL")[:4].upper() 
+        unique_suffix = str(uuid.uuid4())[:6].upper()
+        
+        return f"{brand_code}-{model_code}-{unique_suffix}"
+
     async def get_video_processing_details(self, video_id: int, admin_user: User) -> VideoProcessingResponse:
         """
         Obtener detalles específicos de video procesado - USANDO TABLA DEDICADA
