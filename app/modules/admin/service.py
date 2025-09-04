@@ -12,6 +12,7 @@ from functools import wraps
 import uuid
 import httpx
 import os
+import logging
 
 from fastapi import APIRouter, Depends, Query, File, UploadFile, Form
 
@@ -21,6 +22,9 @@ from .repository import AdminRepository
 from .schemas import *
 
 from app.shared.database.models import User, Location ,AdminLocationAssignment , Product ,InventoryChange ,DiscountRequest , VideoProcessingJob
+
+logging.basicConfig(filename='app.log', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class AdminService:
@@ -1185,7 +1189,7 @@ class AdminService:
         # Validar bodega existe
         warehouse = self.db.query(Location).filter(
             Location.id == video_entry.warehouse_location_id,
-            Location.location_type == "bodega"
+            Location.type == "bodega"
         ).first()
         
         if not warehouse:
@@ -1315,7 +1319,10 @@ class AdminService:
                 color_info=", ".join(json.loads(processing_job.detected_colors)) if processing_job.detected_colors else None,
                 location_name=warehouse.name,
                 total_quantity=processing_job.estimated_quantity,
-                is_active=1
+                is_active=1,
+                created_at=datetime.now(),  
+                updated_at=datetime.now()
+
             )
             
             self.db.add(final_product)
@@ -1361,11 +1368,17 @@ class AdminService:
         job_db_id: int,
         admin_id: int
     ) -> Dict[str, Any]:
-        """
-        🆕 MÉTODO REAL: Procesar video con microservicio de IA
-        """
+        """Procesar video con microservicio de IA - VERSIÓN CORREGIDA"""
         try:
-            # Preparar metadata para el microservicio
+            logger.info(f"🔄 Enviando video al microservicio: {settings.VIDEO_MICROSERVICE_URL}")
+            monolito_api_key = getattr(settings, 'VIDEO_MICROSERVICE_API_KEY', 'NO_CONFIGURADA')
+            logger.info(f"🏢 MONOLITO - Enviando request a: {settings.VIDEO_MICROSERVICE_URL}")
+            logger.info(f"🔑 MONOLITO - API Key configurada: {monolito_api_key[:10] + '...' if monolito_api_key and monolito_api_key != 'NO_CONFIGURADA' else 'VACÍA/NO_CONFIGURADA'}")
+            
+            # ✅ VERIFICAR CONFIGURACIÓN
+            if not hasattr(settings, 'VIDEO_MICROSERVICE_URL') or not settings.VIDEO_MICROSERVICE_URL:
+                raise Exception("VIDEO_MICROSERVICE_URL no está configurada")
+            
             metadata = {
                 "job_db_id": job_db_id,
                 "warehouse_id": video_entry.warehouse_location_id,
@@ -1377,54 +1390,60 @@ class AdminService:
                 "notes": video_entry.notes
             }
             
-            # Abrir archivo de video para enviar
+            # ✅ PREPARAR EL ARCHIVO DE VIDEO
             with open(video_path, "rb") as video_file:
-                files = {"video": video_file}
+                files = {"video": (os.path.basename(video_path), video_file, "video/mp4")}
                 data = {
                     "job_id": job_db_id,
-                    "callback_url": f"{settings.BASE_URL}/api/v1/admin/video-callback",  # URL callback
+                    "callback_url": f"{settings.BASE_URL}/api/v1/admin/admin/video-processing-complete",
                     "metadata": json.dumps(metadata)
                 }
                 
-                # Headers con API Key si está configurada
+                # ✅ HEADERS CORRECTOS PARA AUTENTICACIÓN
                 headers = {}
-                if settings.VIDEO_PROCESSING_API_KEY:
-                    headers["Authorization"] = f"Bearer {settings.VIDEO_PROCESSING_API_KEY}"
+                if hasattr(settings, 'VIDEO_MICROSERVICE_API_KEY') and settings.VIDEO_MICROSERVICE_API_KEY:
+                    headers["X-API-Key"] = settings.VIDEO_MICROSERVICE_API_KEY  # ⚠️ CAMBIO: X-API-Key en lugar de Authorization
                 
-                # Llamada al microservicio
-                async with httpx.AsyncClient(timeout=settings.VIDEO_PROCESSING_TIMEOUT) as client:
+                # ✅ LLAMADA AL MICROSERVICIO CON URL CORRECTA
+                async with httpx.AsyncClient(timeout=300) as client:
                     response = await client.post(
-                        f"{settings.VIDEO_PROCESSING_SERVICE_URL}/api/v1/process-video",
+                        f"{settings.VIDEO_MICROSERVICE_URL}/api/v1/process-video",  # ✅ Variable correcta
                         files=files,
                         data=data,
                         headers=headers
                     )
                     
+                    logger.info(f"🔄 Respuesta del microservicio: {response.status_code}")
+                    
                     if response.status_code != 200:
-                        raise HTTPException(
-                            status_code=500,
-                            detail=f"Error en microservicio: {response.status_code} - {response.text}"
-                        )
+                        error_text = response.text
+                        logger.error(f"❌ Error en microservicio {response.status_code}: {error_text}")
+                        raise Exception(f"Error en microservicio: {response.status_code} - {error_text}")
                     
                     result = response.json()
+                    logger.info(f"✅ Video enviado exitosamente - Job ID: {job_db_id}")
                     
-                    # El microservicio procesa en background, por ahora retornamos confirmación
                     return {
                         "processing_accepted": True,
                         "job_id": job_db_id,
                         "status": result.get("status", "processing"),
-                        "estimated_time": result.get("estimated_time_minutes", "2-5"),
                         "detected_brand": video_entry.product_brand or "Processing...",
                         "detected_model": video_entry.product_model or "Processing...",
-                        "confidence_scores": {"overall": 0.0}  # Se actualizará con callback
+                        "confidence_scores": {"overall": 0.0}
                     }
                     
         except httpx.TimeoutException:
-            raise HTTPException(status_code=408, detail="Timeout procesando video")
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=503, detail=f"Error conectando microservicio: {str(e)}")
+            error_msg = f"Timeout procesando video - Job ID: {job_db_id}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        except httpx.ConnectError as e:
+            error_msg = f"No se pudo conectar al microservicio: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error procesando video: {str(e)}")
+            error_msg = f"Error procesando video con microservicio: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
             
     async def get_location_statistics(
         self,
@@ -1599,6 +1618,98 @@ class AdminService:
         
         return results
     
+    async def _create_products_from_ai_results(
+        self, 
+        ai_results: Dict[str, Any], 
+        processing_job
+    ) -> List[Any]:
+        """
+        Crear productos reales en BD basado en resultados de IA
+        """
+        from app.shared.database.models import Product, ProductSize
+        import json
+        
+        created_products = []
+        
+        try:
+            # Obtener productos detectados
+            detected_products = ai_results.get("detected_products", [])
+            
+            if not detected_products:
+                logger.warning(f"No hay productos detectados para crear - Job {processing_job.id}")
+                return created_products
+            
+            # Usar el mejor producto detectado
+            best_product = detected_products[0]
+            
+            # Generar código de referencia
+            reference_code = self._generate_reference_code(
+                best_product.get('brand', 'Unknown'),
+                best_product.get('model_name', 'Unknown')
+            )
+            
+            # Obtener warehouse
+            from app.shared.database.models import Location
+            warehouse = self.db.query(Location).filter(
+                Location.id == processing_job.warehouse_location_id
+            ).first()
+            
+            # Crear producto
+            new_product = Product(
+                reference_code=reference_code,
+                description=f"{best_product.get('brand', 'Unknown')} {best_product.get('model_name', 'Unknown')}",
+                brand=best_product.get('brand', 'Unknown'),
+                model=best_product.get('model_name', 'Unknown'), 
+                color_info=best_product.get('color', 'Unknown'),
+                location_name=warehouse.name if warehouse else "Unknown",
+                unit_price=Decimal('0.00'),
+                box_price=Decimal('0.00'),
+                total_quantity=processing_job.estimated_quantity,
+                is_active=1,
+                created_at=now,   
+                updated_at=now 
+            )
+            
+            self.db.add(new_product)
+            self.db.flush()  # Para obtener ID
+            
+            # Crear tallas (distribución equitativa)
+            sizes = ['7', '8', '9', '10', '11', '12']  # Tallas por defecto
+            quantity_per_size = processing_job.estimated_quantity // len(sizes)
+            
+            for size in sizes:
+                product_size = ProductSize(
+                    product_id=new_product.id,
+                    size=size,
+                    quantity=quantity_per_size,
+                    quantity_exhibition=0,
+                    location_name=warehouse.name if warehouse else "Unknown",
+                    created_at=now,    
+                    updated_at=now 
+                )
+                self.db.add(product_size)
+            
+            created_products.append(new_product)
+            
+            logger.info(f"✅ Producto creado: {reference_code} - {best_product.get('brand')} {best_product.get('model_name')}")
+            
+            return created_products
+            
+        except Exception as e:
+            logger.error(f"❌ Error creando productos: {e}")
+            self.db.rollback()
+            raise e
+
+    def _generate_reference_code(self, brand: str, model: str) -> str:
+        """Generar código de referencia único"""
+        import uuid
+        
+        brand_code = (brand or "UNK")[:3].upper()
+        model_code = (model or "MDL")[:4].upper() 
+        unique_suffix = str(uuid.uuid4())[:6].upper()
+        
+        return f"{brand_code}-{model_code}-{unique_suffix}"
+
     async def get_video_processing_details(self, video_id: int, admin_user: User) -> VideoProcessingResponse:
         """
         Obtener detalles específicos de video procesado - USANDO TABLA DEDICADA
