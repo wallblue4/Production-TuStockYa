@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query , File, UploadFile,
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import datetime, date
+from sqlalchemy import func
 
 
 from app.config.database import get_db
@@ -1303,7 +1304,10 @@ async def test_microservice_connection(
             "error": str(e)
         }
     
-    return 
+    return
+    
+
+
     
 @router.get("/diagnosis/job-logs/{job_id}")
 async def get_job_logs(

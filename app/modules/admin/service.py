@@ -402,6 +402,7 @@ class AdminService:
         - Si se cambia la ubicación, la nueva ubicación debe estar bajo su control
         - Validar compatibilidad rol-ubicación si se cambia ubicación
         """
+        from sqlalchemy import func
         
         # 1. Buscar el usuario que se quiere actualizar
         user = self.db.query(User).filter(User.id == user_id).first()
@@ -463,21 +464,36 @@ class AdminService:
             if "location_id" in update_dict and update_dict["location_id"] is not None:
                 from app.shared.database.models import UserLocationAssignment
                 
-                # Desactivar asignación anterior
+                new_location_id = update_dict["location_id"]
+                
+                # 1. Desactivar TODAS las asignaciones activas del usuario
                 self.db.query(UserLocationAssignment)\
                     .filter(
                         UserLocationAssignment.user_id == user_id,
                         UserLocationAssignment.is_active == True
                     ).update({"is_active": False})
                 
-                # Crear nueva asignación
-                new_assignment = UserLocationAssignment(
-                    user_id=user_id,
-                    location_id=update_dict["location_id"],
-                    role_at_location=user.role,
-                    is_active=True
-                )
-                self.db.add(new_assignment)
+                # 2. Buscar si ya existe una asignación para esta ubicación específica
+                existing_assignment = self.db.query(UserLocationAssignment)\
+                    .filter(
+                        UserLocationAssignment.user_id == user_id,
+                        UserLocationAssignment.location_id == new_location_id
+                    ).first()
+                
+                if existing_assignment:
+                    # 2a. Ya existe: reactivarla y actualizar datos
+                    existing_assignment.is_active = True
+                    existing_assignment.role_at_location = user.role
+                    existing_assignment.assigned_at = func.current_timestamp()
+                else:
+                    # 2b. No existe: crear nueva asignación
+                    new_assignment = UserLocationAssignment(
+                        user_id=user_id,
+                        location_id=new_location_id,
+                        role_at_location=user.role,
+                        is_active=True
+                    )
+                    self.db.add(new_assignment)
             
             self.db.commit()
             self.db.refresh(user)
