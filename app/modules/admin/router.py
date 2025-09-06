@@ -8,7 +8,14 @@ from sqlalchemy import func
 
 from app.config.database import get_db
 from app.core.auth.dependencies import get_current_user, require_roles
-from app.shared.database.models import User
+from app.shared.database.models import (
+    User, 
+    Location, 
+    DiscountRequest, 
+    TransferRequest,
+    Sale,
+    Product
+)
 from .service import AdminService
 from .schemas import *
 import logging
