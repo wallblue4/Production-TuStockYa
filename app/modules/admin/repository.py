@@ -126,7 +126,7 @@ class AdminRepository:
             .all()
     
     def get_users_by_admin(self, admin_id: int) -> List[User]:
-        """Obtener usuarios gestionados por un administrador - CORREGIDO"""
+        """Obtener usuarios gestionados por un administrador - """
         
         # Si es BOSS, puede ver todos los usuarios
         admin = self.db.query(User).filter(User.id == admin_id).first()
@@ -149,8 +149,7 @@ class AdminRepository:
             .filter(
                 UserLocationAssignment.location_id.in_(managed_location_ids),
                 UserLocationAssignment.is_active == True,
-                User.role.in_(["vendedor", "bodeguero", "corredor"]),
-                User.is_active == True
+                User.role.in_(["vendedor", "bodeguero", "corredor"])
             )\
             .distinct()\
             .order_by(User.created_at.desc())\
