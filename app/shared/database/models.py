@@ -1,7 +1,19 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, Text, ForeignKey, Numeric, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, Text, ForeignKey, Numeric, UniqueConstraint, CheckConstraint , Numeric
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.config.database import Base
+from enum import Enum
+from pydantic import BaseModel , Field, ConfigDict, field_validator, FieldValidationInfo
+
+
+from sqlalchemy import (
+    Column, Integer, String, Boolean, DateTime, Float,
+    Text, ForeignKey, Numeric, UniqueConstraint, CheckConstraint
+)
+
+from sqlalchemy.types import Date
+
+
 
 class TimestampMixin:
     """Mixin para timestamps automáticos"""
@@ -26,6 +38,7 @@ class Location(Base):
     users = relationship("User", back_populates="location")
     expenses = relationship("Expense", back_populates="location")
     sales = relationship("Sale", back_populates="location")
+    cost_configurations = relationship("CostConfiguration", back_populates="location")
 
 class User(Base):
     """Modelo de Usuario - EXACTO A BD"""
@@ -46,6 +59,11 @@ class User(Base):
     sales = relationship("Sale", back_populates="seller")
     expenses = relationship("Expense", back_populates="user")
     location_assignments = relationship("UserLocationAssignment", back_populates="user")
+
+    created_cost_configurations = relationship("CostConfiguration", foreign_keys="CostConfiguration.created_by_user_id")
+    paid_cost_payments = relationship("CostPayment", foreign_keys="CostPayment.paid_by_user_id")
+    created_cost_exceptions = relationship("CostPaymentException", foreign_keys="CostPaymentException.created_by_user_id")
+    deleted_cost_archives = relationship("CostDeletionArchive", foreign_keys="CostDeletionArchive.deleted_by_user_id")
     
     @property
     def full_name(self):
@@ -447,3 +465,99 @@ class VideoProcessingJob(Base):
     
     def __repr__(self):
         return f"<VideoProcessingJob(id={self.id}, status={self.processing_status}, brand={self.detected_brand})>"
+
+
+class CostConfiguration(Base):
+    """Modelo de Configuración de Costos"""
+    __tablename__ = "cost_configurations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    location_id = Column(Integer, ForeignKey("locations.id"), nullable=False)
+    cost_type = Column(String(50), nullable=False)  # 'arriendo', 'servicios', etc.
+    amount = Column(Numeric(10, 2), nullable=False)
+    frequency = Column(String(20), nullable=False)  # 'daily', 'weekly', 'monthly', etc.
+    description = Column(Text, nullable=False)
+    is_active = Column(Boolean, default=True)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, server_default=func.current_timestamp())
+    updated_at = Column(DateTime, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
+    
+    # Constraints
+    __table_args__ = (
+        CheckConstraint('amount > 0', name='chk_cost_amount_positive'),
+        CheckConstraint('end_date IS NULL OR end_date >= start_date', name='chk_cost_date_order'),
+        CheckConstraint("frequency IN ('daily', 'weekly', 'monthly', 'quarterly', 'annual')", name='chk_cost_frequency_valid'),
+        CheckConstraint("cost_type IN ('arriendo', 'servicios', 'nomina', 'mercancia', 'comisiones', 'transporte', 'otros')", name='chk_cost_type_valid'),
+    )
+    
+    # Relationships
+    location = relationship("Location", back_populates="cost_configurations")
+    created_by = relationship("User", foreign_keys=[created_by_user_id])
+    payments = relationship("CostPayment", back_populates="cost_configuration", cascade="all, delete-orphan")
+    exceptions = relationship("CostPaymentException", back_populates="cost_configuration", cascade="all, delete-orphan")
+
+class CostPayment(Base):
+    """Modelo de Pagos Realizados"""
+    __tablename__ = "cost_payments"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    cost_configuration_id = Column(Integer, ForeignKey("cost_configurations.id"), nullable=False)
+    due_date = Column(Date, nullable=False)
+    payment_date = Column(Date, nullable=False)
+    amount = Column(Numeric(10, 2), nullable=False)
+    payment_method = Column(String(50), nullable=False)
+    payment_reference = Column(String(255))
+    notes = Column(Text)
+    paid_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, server_default=func.current_timestamp())
+    
+    # Constraints
+    __table_args__ = (
+        CheckConstraint('amount > 0', name='chk_payment_amount_positive'),
+    )
+    
+    # Relationships
+    cost_configuration = relationship("CostConfiguration", back_populates="payments")
+    paid_by = relationship("User", foreign_keys=[paid_by_user_id])
+
+class CostPaymentException(Base):
+    """Modelo de Excepciones de Pago"""
+    __tablename__ = "cost_payment_exceptions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    cost_configuration_id = Column(Integer, ForeignKey("cost_configurations.id"), nullable=False)
+    exception_date = Column(Date, nullable=False)
+    exception_type = Column(String(20), nullable=False)  # 'skip', 'different_amount', 'postponed'
+    original_amount = Column(Numeric(10, 2))
+    new_amount = Column(Numeric(10, 2))
+    new_due_date = Column(Date)
+    reason = Column(Text)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, server_default=func.current_timestamp())
+    
+    # Constraints
+    __table_args__ = (
+        CheckConstraint("exception_type IN ('skip', 'different_amount', 'postponed')", name='chk_exception_type_valid'),
+    )
+    
+    # Relationships
+    cost_configuration = relationship("CostConfiguration", back_populates="exceptions")
+    created_by = relationship("User", foreign_keys=[created_by_user_id])
+
+class CostDeletionArchive(Base):
+    """Modelo de Archivo de Eliminaciones"""
+    __tablename__ = "cost_deletion_archives"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    original_cost_id = Column(Integer, nullable=False)
+    configuration_data = Column(Text, nullable=False)
+    paid_payments_data = Column(Text)
+    exceptions_data = Column(Text)
+    deleted_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    deletion_date = Column(DateTime, server_default=func.current_timestamp())
+    deletion_reason = Column(String(100))
+    
+    # Relationships
+    deleted_by = relationship("User", foreign_keys=[deleted_by_user_id])

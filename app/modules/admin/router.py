@@ -20,6 +20,7 @@ from .service import AdminService
 from .schemas import *
 import logging
 import json 
+from .cost_router import router as cost_router
 
 # Configuración básica del logger
 logging.basicConfig(level=logging.INFO,
@@ -27,6 +28,8 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["Admin - Administrador"])
+
+router.include_router(cost_router)
 
 # ==================== AD003 & AD004: CREAR USUARIOS ====================
 
