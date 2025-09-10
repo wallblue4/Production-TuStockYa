@@ -39,11 +39,6 @@ class CostService:
         existing_configs = self.repository.get_active_cost_configurations(cost_config.location_id)
         existing_types = {config["cost_type"] for config in existing_configs}
         
-        if cost_config.cost_type in existing_types:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Ya existe una configuración activa de {cost_config.cost_type} para esta ubicación"
-            )
         
         # Crear configuración
         cost_data = cost_config.dict()

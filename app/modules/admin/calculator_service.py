@@ -121,23 +121,17 @@ class CostCalculatorService:
         return dates
     
     def _calculate_payment_status(self, due_date: date) -> tuple[str, int]:
-        """Calcular estado y diferencia de días de un pago"""
-        
         today = date.today()
         
         if due_date < today:
-            # Vencido
             days_difference = (today - due_date).days
             return "overdue", days_difference
         elif due_date == today:
-            # Vence hoy
-            return "pending", 0
+            return "overdue", 0  
         elif due_date <= today + timedelta(days=30):
-            # Próximo a vencer (30 días)
             days_difference = (due_date - today).days
             return "upcoming", days_difference
         else:
-            # Futuro lejano
             days_difference = (due_date - today).days
             return "pending", days_difference
     
@@ -165,7 +159,7 @@ class CostCalculatorService:
             "pending_this_month": Decimal('0'),
             "overdue_amount": Decimal('0'),
             "total_configurations": len(active_configs),
-            "active_configurations": len([c for c in active_configs if c["is_active"]]),
+            "active_configurations": len([c for c in active_configs if c.get("is_active")]),
             "next_payment_date": None
         }
         
@@ -207,7 +201,8 @@ class CostCalculatorService:
                     dashboard["pending_payments"].append(payment)
                 
                 # Calcular pendientes del mes
-                if month_start <= payment["due_date"] <= month_end:
+                if (month_start <= payment["due_date"] <= month_end and 
+                    payment["status"] in ["pending", "upcoming"]):
                     dashboard["pending_this_month"] += payment["amount"]
                 
                 # Recopilar fechas para próximo pago
