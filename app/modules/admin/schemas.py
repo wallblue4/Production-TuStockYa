@@ -37,6 +37,24 @@ class AlertType(str, Enum):
     STOCK_AGOTADO = "stock_agotado"
     PRODUCTO_VENCIDO = "producto_vencido"
 
+class FrequencyType(str, Enum):
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+    QUARTERLY = "quarterly"
+    ANNUAL = "annual"
+
+class PaymentStatus(str, Enum):
+    PENDING = "pending"
+    PAID = "paid"
+    OVERDUE = "overdue"
+    UPCOMING = "upcoming"
+
+class ExceptionType(str, Enum):
+    SKIP = "skip"
+    DIFFERENT_AMOUNT = "different_amount"
+    POSTPONED = "postponed"
+
 # ==================== GESTIÓN DE USUARIOS ====================
 
 class UserCreate(BaseModel):
@@ -395,3 +413,170 @@ class AdminLocationAssignmentBulk(BaseModel):
     admin_id: int = Field(..., description="ID del administrador")
     location_ids: List[int] = Field(..., description="IDs de las ubicaciones")
     notes: Optional[str] = Field(None, description="Notas para todas las asignaciones")
+
+
+class CostConfigurationCreate(BaseModel):
+    """Crear nueva configuración de costo"""
+    location_id: int = Field(..., description="ID de la ubicación")
+    cost_type: CostType = Field(..., description="Tipo de costo")
+    amount: Decimal = Field(..., gt=0, description="Monto del costo")
+    frequency: FrequencyType = Field(..., description="Frecuencia de cobro")
+    description: str = Field(..., min_length=5, description="Descripción del costo")
+    start_date: date = Field(..., description="Fecha de inicio")
+    end_date: Optional[date] = Field(None, description="Fecha de finalización (opcional)")
+    
+    @validator('end_date')
+    def validate_end_date(cls, v, values):
+        if v and 'start_date' in values and v <= values['start_date']:
+            raise ValueError('end_date debe ser posterior a start_date')
+        return v
+
+class CostConfigurationUpdate(BaseModel):
+    """Actualizar configuración existente"""
+    amount: Optional[Decimal] = Field(None, gt=0)
+    frequency: Optional[FrequencyType] = None
+    description: Optional[str] = Field(None, min_length=5)
+    is_active: Optional[bool] = None
+    end_date: Optional[date] = None
+
+class CostConfigurationResponse(BaseModel):
+    """Respuesta de configuración de costo"""
+    id: int
+    location_id: int
+    location_name: str
+    cost_type: str
+    amount: Decimal
+    frequency: str
+    description: str
+    is_active: bool
+    start_date: date
+    end_date: Optional[date]
+    created_by_user_id: int
+    created_by_name: str
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+# ===== PAGOS =====
+
+class CostPaymentCreate(BaseModel):
+    """Registrar nuevo pago"""
+    cost_configuration_id: int = Field(..., description="ID de la configuración de costo")
+    due_date: date = Field(..., description="Fecha que se suponía vencer")
+    payment_amount: Decimal = Field(..., gt=0, description="Monto pagado")
+    payment_date: date = Field(..., description="Fecha real del pago")
+    payment_method: str = Field(..., description="Método de pago")
+    payment_reference: Optional[str] = Field(None, description="Referencia del pago")
+    notes: Optional[str] = Field(None, description="Notas adicionales")
+
+class CostPaymentInstance(BaseModel):
+    """Instancia de pago (calculada dinámicamente)"""
+    cost_configuration_id: int
+    due_date: date
+    amount: Decimal
+    status: PaymentStatus
+    cost_type: str
+    description: str
+    frequency: str
+    days_difference: Optional[int] = None  # Días hasta vencimiento o días vencido
+    is_paid: bool = False
+    payment_date: Optional[date] = None
+    payment_method: Optional[str] = None
+    payment_reference: Optional[str] = None
+
+class CostPaymentResponse(BaseModel):
+    """Respuesta de pago registrado"""
+    id: int
+    cost_configuration_id: int
+    due_date: date
+    payment_date: date
+    amount: Decimal
+    payment_method: str
+    payment_reference: Optional[str]
+    notes: Optional[str]
+    paid_by_user_id: int
+    paid_by_name: str
+    created_at: datetime
+
+# ===== DASHBOARD =====
+
+class CostDashboard(BaseModel):
+    """Dashboard completo de costos"""
+    location_id: int
+    location_name: str
+    total_monthly_costs: Decimal
+    pending_payments: List[CostPaymentInstance]
+    overdue_payments: List[CostPaymentInstance]
+    upcoming_payments: List[CostPaymentInstance]
+    paid_this_month: Decimal
+    pending_this_month: Decimal
+    overdue_amount: Decimal
+    
+    # Métricas adicionales
+    total_configurations: int
+    active_configurations: int
+    next_payment_date: Optional[date]
+
+class OperationalDashboard(BaseModel):
+    """Dashboard operativo consolidado"""
+    summary: Dict[str, Any]
+    locations_status: List[Dict[str, Any]]
+    critical_alerts: List[Dict[str, Any]]
+    upcoming_week: List[Dict[str, Any]]
+    monthly_summary: Dict[str, Decimal]
+
+# ===== EXCEPCIONES =====
+
+class CostPaymentExceptionCreate(BaseModel):
+    """Crear excepción de pago"""
+    cost_configuration_id: int
+    exception_date: date
+    exception_type: ExceptionType
+    original_amount: Optional[Decimal] = None
+    new_amount: Optional[Decimal] = None
+    new_due_date: Optional[date] = None
+    reason: str = Field(..., min_length=10)
+
+# ===== ANÁLISIS =====
+
+class DeletionAnalysis(BaseModel):
+    """Análisis de impacto de eliminación"""
+    has_payments: bool
+    total_paid_payments: int
+    total_paid_amount: Decimal
+    has_exceptions: bool
+    total_exceptions: int
+    future_pending_count: int
+    deletion_recommendation: str  # "safe_delete" o "deactivate"
+    can_delete_safely: bool
+
+class UpdateAmountRequest(BaseModel):
+    """Solicitud de actualización de monto"""
+    new_amount: Decimal = Field(..., gt=0)
+    effective_date: date = Field(..., description="Fecha desde la cual aplica el nuevo monto")
+    reason: Optional[str] = Field(None, description="Razón del cambio")
+    
+    @validator('effective_date')
+    def validate_effective_date(cls, v):
+        if v < date.today():
+            raise ValueError('effective_date no puede ser en el pasado')
+        return v
+
+# ===== RESPUESTAS DE OPERACIONES =====
+
+class CostOperationResponse(BaseModel):
+    """Respuesta genérica de operaciones"""
+    success: bool
+    message: str
+    data: Optional[Dict[str, Any]] = None
+    warnings: Optional[List[str]] = None
+
+class PaymentRegistrationResponse(BaseModel):
+    """Respuesta de registro de pago"""
+    payment_id: int
+    status: str
+    next_due_date: Optional[date]
+    message: str
+    total_paid_amount: Decimal

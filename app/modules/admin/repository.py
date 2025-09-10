@@ -2,14 +2,18 @@
 from datetime import datetime, date, timedelta
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_, func, or_, desc, asc
+from sqlalchemy import and_, func, or_, desc, asc , text
 from decimal import Decimal
+from dateutil.relativedelta import *
+import json
 
 from app.shared.database.models import (
     User, Location, Sale, SaleItem, Product, ProductSize,
     DiscountRequest, TransferRequest, Expense, UserLocationAssignment,
-    InventoryChange , AdminLocationAssignment
+    InventoryChange , AdminLocationAssignment,CostConfiguration, CostPayment, CostPaymentException, 
+    CostDeletionArchive
 )
+
 
 class AdminRepository:
     """
@@ -126,7 +130,7 @@ class AdminRepository:
             .all()
     
     def get_users_by_admin(self, admin_id: int) -> List[User]:
-        """Obtener usuarios gestionados por un administrador - CORREGIDO"""
+        """Obtener usuarios gestionados por un administrador - """
         
         # Si es BOSS, puede ver todos los usuarios
         admin = self.db.query(User).filter(User.id == admin_id).first()
@@ -149,8 +153,7 @@ class AdminRepository:
             .filter(
                 UserLocationAssignment.location_id.in_(managed_location_ids),
                 UserLocationAssignment.is_active == True,
-                User.role.in_(["vendedor", "bodeguero", "corredor"]),
-                User.is_active == True
+                User.role.in_(["vendedor", "bodeguero", "corredor"])
             )\
             .distinct()\
             .order_by(User.created_at.desc())\
@@ -800,3 +803,364 @@ class AdminRepository:
             },
             "recent_activities": recent_activities
         }
+
+class CostRepository:
+    """Repository para gestión de costos"""
+    
+    def __init__(self, db: Session):
+        self.db = db
+    
+    # ==================== CONFIGURACIONES DE COSTO ====================
+    
+    def create_cost_configuration(self, cost_data: dict, admin_id: int) -> Dict[str, Any]:
+        """Crear nueva configuración de costo"""
+        
+        cost_config = CostConfiguration(
+            location_id=cost_data["location_id"],
+            cost_type=cost_data["cost_type"],
+            amount=cost_data["amount"],
+            frequency=cost_data["frequency"],
+            description=cost_data["description"],
+            start_date=cost_data["start_date"],
+            end_date=cost_data.get("end_date"),
+            created_by_user_id=admin_id
+        )
+        
+        self.db.add(cost_config)
+        self.db.commit()
+        self.db.refresh(cost_config)
+        
+        return {
+            "id": cost_config.id,
+            "location_id": cost_config.location_id,
+            "cost_type": cost_config.cost_type,
+            "amount": cost_config.amount,
+            "frequency": cost_config.frequency,
+            "description": cost_config.description,
+            "start_date": cost_config.start_date,
+            "end_date": cost_config.end_date,
+            "is_active": cost_config.is_active,
+            "created_at": cost_config.created_at
+        }
+    
+    def get_cost_configuration_by_id(self, cost_id: int) -> Optional[Dict[str, Any]]:
+        """Obtener configuración por ID"""
+        
+        config = self.db.query(CostConfiguration)\
+            .join(Location, CostConfiguration.location_id == Location.id)\
+            .join(User, CostConfiguration.created_by_user_id == User.id)\
+            .filter(CostConfiguration.id == cost_id)\
+            .first()
+        
+        if not config:
+            return None
+        
+        return {
+            "id": config.id,
+            "location_id": config.location_id,
+            "location_name": config.location.name,
+            "cost_type": config.cost_type,
+            "amount": config.amount,
+            "frequency": config.frequency,
+            "description": config.description,
+            "is_active": config.is_active,
+            "start_date": config.start_date,
+            "end_date": config.end_date,
+            "created_by_user_id": config.created_by_user_id,
+            "created_by_name": config.created_by.full_name,
+            "created_at": config.created_at,
+            "updated_at": config.updated_at
+        }
+    
+    def get_active_cost_configurations(self, location_id: int) -> List[Dict[str, Any]]:
+        """Obtener configuraciones activas de una ubicación"""
+        
+        configs = self.db.query(CostConfiguration)\
+            .join(Location, CostConfiguration.location_id == Location.id)\
+            .filter(
+                CostConfiguration.location_id == location_id,
+                CostConfiguration.is_active == True
+            )\
+            .order_by(CostConfiguration.cost_type, CostConfiguration.created_at)\
+            .all()
+        
+        return [
+            {
+                "id": config.id,
+                "location_id": config.location_id,
+                "location_name": config.location.name,
+                "cost_type": config.cost_type,
+                "amount": config.amount,
+                "frequency": config.frequency,
+                "description": config.description,
+                "start_date": config.start_date,
+                "end_date": config.end_date,
+                "created_at": config.created_at
+            }
+            for config in configs
+        ]
+    
+    def update_cost_configuration(self, cost_id: int, update_data: dict) -> Dict[str, Any]:
+        """Actualizar configuración existente"""
+        
+        config = self.db.query(CostConfiguration).filter(CostConfiguration.id == cost_id).first()
+        if not config:
+            return {}
+        
+        for key, value in update_data.items():
+            if hasattr(config, key) and value is not None:
+                setattr(config, key, value)
+        
+        self.db.commit()
+        self.db.refresh(config)
+        
+        return self.get_cost_configuration_by_id(cost_id)
+    
+    def delete_cost_configuration(self, cost_id: int):
+        """Eliminar configuración de costo"""
+        
+        config = self.db.query(CostConfiguration).filter(CostConfiguration.id == cost_id).first()
+        if config:
+            self.db.delete(config)
+            self.db.commit()
+    
+    # ==================== PAGOS ====================
+    
+    def create_payment_record(self, payment_data: dict) -> Dict[str, Any]:
+        """Registrar pago realizado"""
+        
+        payment = CostPayment(
+            cost_configuration_id=payment_data["cost_configuration_id"],
+            due_date=payment_data["due_date"],
+            payment_date=payment_data["payment_date"],
+            amount=payment_data["payment_amount"],
+            payment_method=payment_data["payment_method"],
+            payment_reference=payment_data.get("payment_reference"),
+            notes=payment_data.get("notes"),
+            paid_by_user_id=payment_data["paid_by_user_id"]
+        )
+        
+        self.db.add(payment)
+        self.db.commit()
+        self.db.refresh(payment)
+        
+        return {
+            "id": payment.id,
+            "cost_configuration_id": payment.cost_configuration_id,
+            "due_date": payment.due_date,
+            "payment_date": payment.payment_date,
+            "amount": payment.amount,
+            "payment_method": payment.payment_method,
+            "payment_reference": payment.payment_reference,
+            "notes": payment.notes,
+            "created_at": payment.created_at
+        }
+    
+    def get_paid_payments_for_config(
+        self, 
+        cost_config_id: int, 
+        from_date: date, 
+        to_date: date
+    ) -> List[Dict[str, Any]]:
+        """Obtener pagos realizados en un rango de fechas"""
+        
+        payments = self.db.query(CostPayment)\
+            .filter(
+                CostPayment.cost_configuration_id == cost_config_id,
+                CostPayment.due_date >= from_date,
+                CostPayment.due_date <= to_date
+            )\
+            .order_by(CostPayment.due_date)\
+            .all()
+        
+        return [
+            {
+                "id": payment.id,
+                "due_date": payment.due_date,
+                "payment_date": payment.payment_date,
+                "amount": payment.amount,
+                "payment_method": payment.payment_method,
+                "payment_reference": payment.payment_reference
+            }
+            for payment in payments
+        ]
+    
+    def get_all_paid_payments_for_config(self, cost_config_id: int) -> List[Dict[str, Any]]:
+        """Obtener todos los pagos realizados de una configuración"""
+        
+        payments = self.db.query(CostPayment)\
+            .join(User, CostPayment.paid_by_user_id == User.id)\
+            .filter(CostPayment.cost_configuration_id == cost_config_id)\
+            .order_by(desc(CostPayment.payment_date))\
+            .all()
+        
+        return [
+            {
+                "id": payment.id,
+                "due_date": payment.due_date,
+                "payment_date": payment.payment_date,
+                "amount": payment.amount,
+                "payment_method": payment.payment_method,
+                "payment_reference": payment.payment_reference,
+                "notes": payment.notes,
+                "paid_by_name": payment.paid_by.full_name
+            }
+            for payment in payments
+        ]
+    
+    def get_paid_amount_for_month(self, location_id: int, month_start: date, month_end: date) -> Decimal:
+        """Obtener monto total pagado en un mes"""
+        
+        result = self.db.query(func.sum(CostPayment.amount))\
+            .join(CostConfiguration, CostPayment.cost_configuration_id == CostConfiguration.id)\
+            .filter(
+                CostConfiguration.location_id == location_id,
+                CostPayment.payment_date >= month_start,
+                CostPayment.payment_date <= month_end
+            )\
+            .scalar()
+        
+        return result or Decimal('0')
+    
+    def delete_paid_payments_for_config(self, cost_config_id: int):
+        """Eliminar todos los pagos de una configuración"""
+        
+        self.db.query(CostPayment)\
+            .filter(CostPayment.cost_configuration_id == cost_config_id)\
+            .delete()
+        self.db.commit()
+    
+    # ==================== EXCEPCIONES ====================
+    
+    def get_payment_exceptions_for_config(
+        self, 
+        cost_config_id: int, 
+        from_date: date, 
+        to_date: date
+    ) -> List[Dict[str, Any]]:
+        """Obtener excepciones en un rango de fechas"""
+        
+        exceptions = self.db.query(CostPaymentException)\
+            .filter(
+                CostPaymentException.cost_configuration_id == cost_config_id,
+                CostPaymentException.exception_date >= from_date,
+                CostPaymentException.exception_date <= to_date
+            )\
+            .order_by(CostPaymentException.exception_date)\
+            .all()
+        
+        return [
+            {
+                "exception_date": exc.exception_date,
+                "exception_type": exc.exception_type,
+                "original_amount": exc.original_amount,
+                "new_amount": exc.new_amount,
+                "new_due_date": exc.new_due_date,
+                "reason": exc.reason
+            }
+            for exc in exceptions
+        ]
+    
+    def get_all_payment_exceptions_for_config(self, cost_config_id: int) -> List[Dict[str, Any]]:
+        """Obtener todas las excepciones de una configuración"""
+        
+        exceptions = self.db.query(CostPaymentException)\
+            .filter(CostPaymentException.cost_configuration_id == cost_config_id)\
+            .order_by(CostPaymentException.exception_date)\
+            .all()
+        
+        return [
+            {
+                "id": exc.id,
+                "exception_date": exc.exception_date,
+                "exception_type": exc.exception_type,
+                "original_amount": exc.original_amount,
+                "new_amount": exc.new_amount,
+                "new_due_date": exc.new_due_date,
+                "reason": exc.reason
+            }
+            for exc in exceptions
+        ]
+    
+    def delete_payment_exceptions_for_config(self, cost_config_id: int):
+        """Eliminar todas las excepciones de una configuración"""
+        
+        self.db.query(CostPaymentException)\
+            .filter(CostPaymentException.cost_configuration_id == cost_config_id)\
+            .delete()
+        self.db.commit()
+    
+    # ==================== ARCHIVO Y AUDITORÍA ====================
+    
+    def create_deletion_archive_record(self, archive_data: dict) -> int:
+        """Crear registro de archivo antes de eliminación"""
+        
+        archive = CostDeletionArchive(
+            original_cost_id=archive_data["original_cost_id"],
+            configuration_data=json.dumps(archive_data["configuration_data"], default=str),
+            paid_payments_data=json.dumps(archive_data["paid_payments_data"], default=str),
+            exceptions_data=json.dumps(archive_data["exceptions_data"], default=str),
+            deleted_by_user_id=archive_data["deleted_by_user_id"],
+	    deletion_reason=archive_data["deletion_reason"]
+       )
+       
+        self.db.add(archive)
+        self.db.commit()
+        self.db.refresh(archive)
+        
+        return archive.id
+    
+    # ==================== MÉTODOS DE CONSULTA AVANZADA ====================
+    
+    def get_managed_locations_for_admin(self, admin_id: int) -> List[Dict[str, Any]]:
+        """Obtener ubicaciones gestionadas por un administrador"""
+        
+        # Esta implementación asume que existe una tabla admin_location_assignments
+        # Si no existe, adaptar según la lógica de tu sistema
+        locations = self.db.query(Location)\
+            .join(text("""
+                admin_location_assignments ala ON locations.id = ala.location_id
+            """))\
+            .filter(text("ala.admin_id = :admin_id AND ala.is_active = true"))\
+            .params(admin_id=admin_id)\
+            .all()
+        
+        return [
+            {
+                "id": loc.id,
+                "name": loc.name,
+                "type": loc.type,
+                "address": loc.address
+            }
+            for loc in locations
+        ]
+    
+    def get_cost_configurations_by_admin(self, admin_id: int) -> List[Dict[str, Any]]:
+        """Obtener todas las configuraciones de un administrador"""
+        
+        configs = self.db.query(CostConfiguration)\
+            .join(Location, CostConfiguration.location_id == Location.id)\
+            .join(text("""
+                admin_location_assignments ala ON locations.id = ala.location_id
+            """))\
+            .filter(
+                text("ala.admin_id = :admin_id AND ala.is_active = true"),
+                CostConfiguration.is_active == True
+            )\
+            .params(admin_id=admin_id)\
+            .order_by(Location.name, CostConfiguration.cost_type)\
+            .all()
+        
+        return [
+            {
+                "id": config.id,
+                "location_id": config.location_id,
+                "location_name": config.location.name,
+                "cost_type": config.cost_type,
+                "amount": config.amount,
+                "frequency": config.frequency,
+                "description": config.description,
+                "start_date": config.start_date
+            }
+            for config in configs
+        ]
