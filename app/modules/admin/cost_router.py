@@ -43,6 +43,33 @@ async def create_cost_configuration(
     service = CostService(db)
     return await service.create_cost_configuration(cost_config, current_user)
 
+
+@router.get("/operational-dashboard", response_model=OperationalDashboard)
+async def get_operational_dashboard(
+    current_user: User = Depends(require_roles(["administrador", "boss"])),
+    db: Session = Depends(get_db)
+):
+    """
+    Dashboard operativo consolidado de todas las ubicaciones
+    
+    **Métricas incluidas:**
+    - Resumen ejecutivo de todas las ubicaciones
+    - Estado financiero por ubicación
+    - Alertas críticas priorizadas
+    - Próximos vencimientos (7 días)
+    - Totales consolidados mensuales
+    
+    **Casos de uso:**
+    - Vista ejecutiva diaria
+    - Identificación de problemas críticos
+    - Planificación de flujo de efectivo
+    - Seguimiento operativo general
+    """
+    service = CostService(db)
+    return await service.get_operational_dashboard(current_user)
+
+
+
 @router.get("", response_model=List[CostConfigurationResponse])
 async def get_cost_configurations(
     location_id: Optional[int] = Query(None, description="Filtrar por ubicación"),
@@ -222,29 +249,6 @@ async def get_location_cost_dashboard(
     service = CostService(db)
     return await service.get_location_cost_dashboard(location_id, current_user)
 
-@router.get("/operational-dashboard", response_model=OperationalDashboard)
-async def get_operational_dashboard(
-    current_user: User = Depends(require_roles(["administrador", "boss"])),
-    db: Session = Depends(get_db)
-):
-    """
-    Dashboard operativo consolidado de todas las ubicaciones
-    
-    **Métricas incluidas:**
-    - Resumen ejecutivo de todas las ubicaciones
-    - Estado financiero por ubicación
-    - Alertas críticas priorizadas
-    - Próximos vencimientos (7 días)
-    - Totales consolidados mensuales
-    
-    **Casos de uso:**
-    - Vista ejecutiva diaria
-    - Identificación de problemas críticos
-    - Planificación de flujo de efectivo
-    - Seguimiento operativo general
-    """
-    service = CostService(db)
-    return await service.get_operational_dashboard(current_user)
 
 # ==================== ANÁLISIS Y UTILIDADES ====================
 

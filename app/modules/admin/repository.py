@@ -1115,14 +1115,14 @@ class CostRepository:
     def get_managed_locations_for_admin(self, admin_id: int) -> List[Dict[str, Any]]:
         """Obtener ubicaciones gestionadas por un administrador"""
         
-        # Esta implementación asume que existe una tabla admin_location_assignments
-        # Si no existe, adaptar según la lógica de tu sistema
+        # Usar el modelo AdminLocationAssignment en lugar de text()
         locations = self.db.query(Location)\
-            .join(text("""
-                admin_location_assignments ala ON locations.id = ala.location_id
-            """))\
-            .filter(text("ala.admin_id = :admin_id AND ala.is_active = true"))\
-            .params(admin_id=admin_id)\
+            .join(AdminLocationAssignment, Location.id == AdminLocationAssignment.location_id)\
+            .filter(
+                AdminLocationAssignment.admin_id == admin_id,
+                AdminLocationAssignment.is_active == True,
+                Location.is_active == True
+            )\
             .all()
         
         return [
@@ -1133,21 +1133,19 @@ class CostRepository:
                 "address": loc.address
             }
             for loc in locations
-        ]
+        ]   
     
     def get_cost_configurations_by_admin(self, admin_id: int) -> List[Dict[str, Any]]:
         """Obtener todas las configuraciones de un administrador"""
         
         configs = self.db.query(CostConfiguration)\
             .join(Location, CostConfiguration.location_id == Location.id)\
-            .join(text("""
-                admin_location_assignments ala ON locations.id = ala.location_id
-            """))\
+            .join(AdminLocationAssignment, Location.id == AdminLocationAssignment.location_id)\
             .filter(
-                text("ala.admin_id = :admin_id AND ala.is_active = true"),
+                AdminLocationAssignment.admin_id == admin_id,
+                AdminLocationAssignment.is_active == True,
                 CostConfiguration.is_active == True
             )\
-            .params(admin_id=admin_id)\
             .order_by(Location.name, CostConfiguration.cost_type)\
             .all()
         
