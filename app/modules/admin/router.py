@@ -792,78 +792,102 @@ async def get_system_overview(
         }
     }
 
-@router.post("/inventory/video-entry", response_model=VideoProcessingResponse)
+# app/modules/admin/router.py - ENDPOINT ACTUALIZADO
+
+@router.post("/inventory/video-entry", response_model=ProductCreationResponse)
 async def process_video_inventory_entry(
     warehouse_location_id: int = Form(..., description="ID de bodega destino"),
-    estimated_quantity: int = Form(..., gt=0, description="Cantidad estimada"),
+    size_quantities_json: str = Form(..., description="JSON con tallas y cantidades: [{'size':'39','quantity':5}]"),
     product_brand: Optional[str] = Form(None, description="Marca del producto"),
     product_model: Optional[str] = Form(None, description="Modelo del producto"),
-    expected_sizes: Optional[str] = Form(None, description="Tallas esperadas (separadas por coma)"),
     notes: Optional[str] = Form(None, description="Notas adicionales"),
+    reference_image: Optional[UploadFile] = File(None, description="Imagen de referencia del producto"),
     video_file: UploadFile = File(..., description="Video del producto para IA"),
     current_user: User = Depends(require_roles(["administrador", "boss"])),
     db: Session = Depends(get_db)
 ):
     """
-    AD016: Registro de inventario con video IA (MIGRADO DE BG010)
+    AD016: Registro de inventario con video IA + tallas específicas + imagen de referencia
     
     **Funcionalidad principal:**
-    - Registro estratégico de inventario por administradores
+    - Registro de inventario con cantidades específicas por talla
     - Procesamiento automático de video con IA
+    - Almacenamiento de imagen de referencia en Cloudinary
     - Extracción de características del producto
-    - Entrenamiento automático del sistema de reconocimiento
-    - Asignación automática a bodegas según reglas configuradas
+    - Creación automática de inventario con tallas exactas
     
     **Proceso completo:**
-    1. Administrador graba video del producto desde múltiples ángulos
-    2. Sistema procesa video automáticamente para entrenar IA
-    3. IA extrae: marca, modelo, color, tallas visibles
-    4. Se registra información completa para verificación posterior
-    5. Sistema aplica reglas de distribución configuradas
-    6. Se asignan ubicaciones físicas automáticamente
-    7. IA queda entrenada para reconocer el nuevo producto
+    1. Administrador especifica cantidades exactas por talla
+    2. Sube imagen de referencia (opcional) que se almacena en Cloudinary
+    3. Sube video que se procesa temporalmente con IA
+    4. IA extrae: marca, modelo, color, características adicionales
+    5. Se combina información del usuario con resultados de IA
+    6. Se crea producto con datos optimizados
+    7. Se crean ProductSize con cantidades específicas (no distribución automática)
+    8. Video temporal se elimina después del procesamiento
     
     **Criterios de negocio:**
     - Solo administradores y boss pueden registrar inventario
-    - Video debe mostrar producto desde múltiples ángulos
-    - Procesamiento debe extraer características automáticamente
-    - Debe asignar bodegas según reglas configuradas
-    - IA debe quedar entrenada inmediatamente
-    - Debe generar ubicación física automática
+    - Tallas y cantidades son exactas según especificación del usuario
+    - Imagen se almacena permanentemente en Cloudinary
+    - Video es temporal, solo para procesamiento IA
+    - Sistema genera código de referencia único automáticamente
     
+    **Formato size_quantities_json:**
+    [
+        {"size": "39", "quantity": 3},
+        {"size": "40", "quantity": 8},
+        {"size": "41", "quantity": 6}
+    ]
+
     **Requisitos del video:**
-    - Mostrar producto desde múltiples ángulos (mínimo 4 ángulos)
+    - Formato: MP4, MOV, AVI (máximo 100MB)
+    - Mostrar producto desde múltiples ángulos
     - Incluir etiquetas y tallas visibles claramente
     - Buena iluminación y enfoque nítido
     - Duración recomendada: 30-90 segundos
-    - Formato: MP4, MOV, AVI (máximo 100MB)
+
+    **Requisitos de imagen de referencia:**
+    - Formato: JPG, PNG, WebP (máximo 10MB)
+    - Resolución recomendada: 800x600px
+    - Buena calidad y iluminación
     """
     service = AdminService(db)
-    
+
     # Validar archivo de video
     if not video_file.content_type.startswith('video/'):
         raise HTTPException(status_code=400, detail="Archivo debe ser un video válido")
-    
-    # Validar tamaño (100MB máximo)
+
+    # Validar tamaño del video (100MB máximo)
     if video_file.size > 100 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Video no debe superar 100MB")
-    
-    # Procesar tallas esperadas
-    expected_sizes_list = None
-    if expected_sizes:
-        expected_sizes_list = [size.strip() for size in expected_sizes.split(',')]
-    
-    video_entry = VideoProductEntry(
-        video_file_path="",  # Se establecerá en el servicio
+
+    # Validar imagen de referencia si se proporciona
+    if reference_image:
+        if not reference_image.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="Archivo de referencia debe ser una imagen")
+        if reference_image.size > settings.max_image_size:
+            raise HTTPException(status_code=400, detail="Imagen no debe superar 10MB")
+
+    # Parsear y validar tallas con cantidades
+    try:
+        size_quantities_data = json.loads(size_quantities_json)
+        if not isinstance(size_quantities_data, list) or len(size_quantities_data) == 0:
+            raise ValueError("Debe ser un array con al menos una talla")
+        size_quantities = [SizeQuantityEntry(**sq) for sq in size_quantities_data]
+    except (json.JSONDecodeError, ValidationError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Error en tallas: {str(e)}")
+
+    # Crear objeto de entrada
+    video_entry = VideoProductEntryWithSizes(
         warehouse_location_id=warehouse_location_id,
-        estimated_quantity=estimated_quantity,
+        size_quantities=size_quantities,
         product_brand=product_brand,
         product_model=product_model,
-        expected_sizes=expected_sizes_list,
         notes=notes
     )
-    
-    return await service.process_video_inventory_entry(video_entry, video_file, current_user)
+
+    return await service.process_video_inventory_entry(video_entry, video_file, reference_image, current_user)
 
 @router.get("/inventory/video-entries", response_model=List[VideoProcessingResponse])
 async def get_video_processing_history(
