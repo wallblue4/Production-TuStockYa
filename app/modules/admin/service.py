@@ -15,13 +15,14 @@ import os
 import logging
 
 from fastapi import APIRouter, Depends, Query, File, UploadFile, Form
+from app.shared.services.cloudinary_service import cloudinary_service
 
 
 from app.config.settings import settings
 from .repository import AdminRepository
 from .schemas import *
 
-from app.shared.database.models import User, Location ,AdminLocationAssignment , Product ,InventoryChange ,DiscountRequest , VideoProcessingJob
+from app.shared.database.models import User, Location ,AdminLocationAssignment , Product ,InventoryChange ,DiscountRequest , VideoProcessingJob ,ProductSize
 
 logging.basicConfig(filename='app.log', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1192,123 +1193,223 @@ class AdminService:
     
     async def process_video_inventory_entry(
         self, 
-        video_entry: VideoProductEntry, 
+        video_entry: VideoProductEntryWithSizes,
         video_file: UploadFile, 
+        reference_image: Optional[UploadFile],
         admin: User
-    ) -> VideoProcessingResponse:
+    ) -> ProductCreationResponse:
         """
-        AD016: Procesamiento de video con IA - VERSIÓN CON TABLA DEDICADA
+        AD016: Procesamiento optimizado - Solo microservicio maneja el video
+        
+        ELIMINA duplicación de almacenamiento de video
+        El monolito solo maneja: imagen + tallas específicas + coordinación
         """
-        from app.shared.database.models import VideoProcessingJob, Location
-        import json
+        from app.shared.database.models import Location
+        from app.services.cloudinary_service import cloudinary_service
         
-        # Validar bodega existe
-        warehouse = self.db.query(Location).filter(
-            Location.id == video_entry.warehouse_location_id,
-            Location.type == "bodega"
-        ).first()
+        start_time = datetime.now()
+        image_url = None
         
-        if not warehouse:
-            raise HTTPException(status_code=404, detail="Bodega no encontrada")
-        
-        # Crear archivo único
-        file_extension = video_file.filename.split('.')[-1]
-        unique_filename = f"inventory_video_{uuid.uuid4().hex}.{file_extension}"
-        video_path = f"uploads/inventory_videos/{unique_filename}"
-        
-        # Crear directorio si no existe
-        os.makedirs("uploads/inventory_videos", exist_ok=True)
-        
-        # Guardar archivo localmente
-        file_content = await video_file.read()
-        with open(video_path, "wb") as buffer:
-            buffer.write(file_content)
-        
-        # 🆕 CREAR REGISTRO EN TABLA DEDICADA
-        processing_job = VideoProcessingJob(
-            video_file_path=video_path,
-            original_filename=video_file.filename,
-            file_size_bytes=len(file_content),
-            warehouse_location_id=warehouse.id,
-            estimated_quantity=video_entry.estimated_quantity,
-            product_brand=video_entry.product_brand,
-            product_model=video_entry.product_model,
-            expected_sizes=json.dumps(video_entry.expected_sizes) if video_entry.expected_sizes else None,
-            notes=video_entry.notes,
-            processing_status="processing",
-            processed_by_user_id=admin.id,
-            processing_started_at=datetime.now()
-        )
-        
-        self.db.add(processing_job)
-        self.db.commit()
-        self.db.refresh(processing_job)
-        
-        # 🆕 PROCESAMIENTO REAL CON MICROSERVICIO
         try:
-            ai_result = await self._process_video_with_microservice(
-                video_path, 
-                video_entry, 
-                processing_job.id,
-                admin.id
+            # ==================== VALIDACIONES INICIALES ====================
+            
+            warehouse = self.db.query(Location).filter(
+                Location.id == video_entry.warehouse_location_id,
+                Location.type == "bodega"
+            ).first()
+            
+            if not warehouse:
+                raise HTTPException(status_code=404, detail="Bodega no encontrada")
+            
+            # ==================== 🆕 SUBIR IMAGEN DE REFERENCIA ====================
+            
+            if reference_image:
+                try:
+                    logger.info("🖼️ Subiendo imagen de referencia a Cloudinary...")
+                    
+                    temp_reference = f"TEMP_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{admin.id}"
+                    
+                    image_url = await cloudinary_service.upload_product_reference_image(
+                        reference_image, 
+                        temp_reference, 
+                        admin.id
+                    )
+                    
+                    logger.info(f"✅ Imagen subida: {image_url}")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error subiendo imagen: {str(e)}")
+                    image_url = None
+            
+            # ==================== CREAR ENTRADA DE PROCESAMIENTO (SIN ALMACENAR VIDEO) ====================
+            
+            processing_job = VideoProcessingJob(
+                video_file_path="",  # 🚀 VACÍO - No almacenamos el video
+                original_filename=video_file.filename,
+                file_size_bytes=video_file.size,
+                warehouse_location_id=warehouse.id,
+                estimated_quantity=video_entry.total_quantity,
+                product_brand=video_entry.product_brand,
+                product_model=video_entry.product_model,
+                expected_sizes=json.dumps([sq.dict() for sq in video_entry.size_quantities]),
+                notes=video_entry.notes,
+                processing_status="processing",
+                processed_by_user_id=admin.id,
+                processing_started_at=datetime.now()
             )
             
-            # Actualizar job con resultados
-            processing_job.processing_status = "completed"
-            processing_job.processing_completed_at = datetime.now()
-            processing_job.ai_results_json = json.dumps(ai_result)
-            processing_job.confidence_score = ai_result.get("confidence_scores", {}).get("overall", 0.0)
-            processing_job.detected_brand = ai_result.get("detected_brand")
-            processing_job.detected_model = ai_result.get("detected_model")
-            processing_job.detected_colors = json.dumps(ai_result.get("detected_colors", []))
-            processing_job.detected_sizes = json.dumps(ai_result.get("detected_sizes", []))
+            self.db.add(processing_job)
+            self.db.commit()
+            self.db.refresh(processing_job)
             
-            # 🆕 CREAR PRODUCTO FINAL Y REGISTRO DE INVENTARIO
-            final_product_id, inventory_change_id = await self._create_final_product_and_inventory(
-                processing_job, ai_result, warehouse, admin
-            )
+            # ==================== 🚀 ENVIAR DIRECTAMENTE AL MICROSERVICIO ====================
             
-            processing_job.created_product_id = final_product_id
-            processing_job.created_inventory_change_id = inventory_change_id
-            
-            status = "completed"
-            
+            try:
+                ai_result = await self._send_video_to_microservice_direct(
+                    video_file,  # 🚀 ENVIAR ARCHIVO DIRECTO (no guardado)
+                    video_entry, 
+                    processing_job.id,
+                    admin.id
+                )
+                
+                # Actualizar job con resultados
+                processing_job.processing_status = "completed"
+                processing_job.processing_completed_at = datetime.now()
+                processing_job.ai_results_json = json.dumps(ai_result)
+                processing_job.confidence_score = ai_result.get("confidence_scores", {}).get("overall", 0.0)
+                processing_job.detected_brand = ai_result.get("detected_brand")
+                processing_job.detected_model = ai_result.get("detected_model")
+                processing_job.detected_colors = json.dumps(ai_result.get("detected_colors", []))
+                processing_job.detected_sizes = json.dumps(ai_result.get("detected_sizes", []))
+                
+                # Crear producto con tallas específicas
+                final_product_id, inventory_change_id = await self._create_final_product_and_inventory_with_sizes(
+                    processing_job, ai_result, warehouse, admin, video_entry.size_quantities, image_url
+                )
+                
+                processing_job.created_product_id = final_product_id
+                processing_job.created_inventory_change_id = inventory_change_id
+                
+                self.db.commit()
+                
+                # Construir respuesta
+                final_product = self.db.query(Product).filter(Product.id == final_product_id).first()
+                
+                return ProductCreationResponse(
+                    success=True,
+                    product_id=final_product.id,
+                    reference_code=final_product.reference_code,
+                    image_url=image_url,
+                    brand=final_product.brand,
+                    model=final_product.model,
+                    total_quantity=video_entry.total_quantity,
+                    warehouse_name=warehouse.name,
+                    sizes_created=video_entry.size_quantities,
+                    ai_confidence_score=processing_job.confidence_score,
+                    ai_detected_info=ai_result,
+                    created_by_user_id=admin.id,
+                    created_by_name=admin.full_name,
+                    created_at=processing_job.created_at,
+                    processing_time_seconds=(datetime.now() - start_time).total_seconds()
+                )
+                
+            except Exception as e:
+                logger.error(f"❌ Error en procesamiento: {e}")
+                processing_job.processing_status = "failed"
+                processing_job.error_message = str(e)
+                processing_job.retry_count += 1
+                self.db.commit()
+                raise e
+                
         except Exception as e:
-            # Actualizar job con error
-            processing_job.processing_status = "failed"
-            processing_job.processing_completed_at = datetime.now()
-            processing_job.error_message = str(e)
-            processing_job.retry_count += 1
+            self.db.rollback()
             
-            status = "failed"
-            ai_result = {"error_message": str(e)}
+            # Limpiar imagen de Cloudinary si se subió
+            if image_url:
+                try:
+                    await cloudinary_service.delete_image(image_url)
+                except:
+                    pass
+            
+            raise HTTPException(status_code=500, detail=f"Error procesando inventario: {str(e)}")
+
+# ==================== 🚀 NUEVO MÉTODO: ENVÍO DIRECTO AL MICROSERVICIO ====================
+
+async def _send_video_to_microservice_direct(
+    self, 
+    video_file: UploadFile,  # 🚀 ARCHIVO DIRECTO, no path local
+    video_entry: VideoProductEntryWithSizes,
+    job_db_id: int,
+    admin_id: int
+) -> Dict[str, Any]:
+    """
+    Enviar video directamente al microservicio sin almacenar localmente
+    
+    ELIMINA duplicación de almacenamiento
+    """
+    import httpx
+    
+    try:
+        logger.info(f"🚀 Enviando video DIRECTO al microservicio: {settings.VIDEO_MICROSERVICE_URL}")
         
-        self.db.commit()
+        # Verificar configuración
+        if not hasattr(settings, 'VIDEO_MICROSERVICE_URL') or not settings.VIDEO_MICROSERVICE_URL:
+            raise Exception("VIDEO_MICROSERVICE_URL no está configurada")
         
-        # Construir respuesta
-        return VideoProcessingResponse(
-            id=processing_job.id,
-            video_file_path=processing_job.video_file_path,
-            warehouse_location_id=processing_job.warehouse_location_id,
-            warehouse_name=warehouse.name,
-            estimated_quantity=processing_job.estimated_quantity,
-            processing_status=status,
-            ai_extracted_info=json.loads(processing_job.ai_results_json) if processing_job.ai_results_json else ai_result,
-            detected_products=[{
-                "brand": processing_job.detected_brand or "Unknown",
-                "model": processing_job.detected_model or "Unknown",
-                "colors": json.loads(processing_job.detected_colors) if processing_job.detected_colors else [],
-                "sizes": json.loads(processing_job.detected_sizes) if processing_job.detected_sizes else [],
-                "confidence": float(processing_job.confidence_score) if processing_job.confidence_score else 0.0
-            }] if status == "completed" else [],
-            confidence_score=float(processing_job.confidence_score) if processing_job.confidence_score else 0.0,
-            processed_by_user_id=processing_job.processed_by_user_id,
-            processed_by_name=admin.full_name,
-            processing_started_at=processing_job.processing_started_at,
-            processing_completed_at=processing_job.processing_completed_at,
-            error_message=processing_job.error_message,
-            notes=processing_job.notes
-        )
+        # Preparar metadata
+        metadata = {
+            "job_db_id": job_db_id,
+            "warehouse_id": video_entry.warehouse_location_id,
+            "admin_id": admin_id,
+            "estimated_quantity": video_entry.total_quantity,
+            "product_brand": video_entry.product_brand,
+            "product_model": video_entry.product_model,
+            "expected_sizes": [sq.dict() for sq in video_entry.size_quantities],  # 🆕 TALLAS ESPECÍFICAS
+            "notes": video_entry.notes
+        }
+        
+        # 🚀 LEER ARCHIVO DIRECTO (sin guardar localmente)
+        await video_file.seek(0)  # Asegurar posición inicial
+        video_content = await video_file.read()
+        
+        # Preparar para envío
+        files = {
+            "video": (video_file.filename, video_content, video_file.content_type)
+        }
+        data = {
+            "job_id": job_db_id,
+            "callback_url": f"{settings.BASE_URL}/api/v1/admin/admin/video-processing-complete",
+            "metadata": json.dumps(metadata)
+        }
+        
+        # Headers de autenticación
+        headers = {}
+        if hasattr(settings, 'VIDEO_MICROSERVICE_API_KEY') and settings.VIDEO_MICROSERVICE_API_KEY:
+            headers["X-API-Key"] = settings.VIDEO_MICROSERVICE_API_KEY
+        
+        # 🚀 ENVÍO DIRECTO AL MICROSERVICIO
+        async with httpx.AsyncClient(timeout=300) as client:
+            response = await client.post(
+                f"{settings.VIDEO_MICROSERVICE_URL}/api/v1/process-video",
+                files=files,
+                data=data,
+                headers=headers
+            )
+            
+            logger.info(f"🔄 Respuesta del microservicio: {response.status_code}")
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"✅ Video procesado exitosamente por microservicio")
+                return result
+            else:
+                error_detail = response.text
+                logger.error(f"❌ Error del microservicio: {response.status_code} - {error_detail}")
+                raise Exception(f"Microservicio error: {response.status_code} - {error_detail}")
+                
+    except Exception as e:
+        logger.error(f"❌ Error enviando video al microservicio: {str(e)}")
+        raise Exception(f"Error comunicando con microservicio de IA: {str(e)}")
 
     async def _create_final_product_and_inventory(
         self, 
@@ -1682,8 +1783,8 @@ class AdminService:
                 box_price=Decimal('0.00'),
                 total_quantity=processing_job.estimated_quantity,
                 is_active=1,
-                created_at=now,   
-                updated_at=now 
+                created_at=datetime.now(),
+                updated_at=datetime.now()
             )
             
             self.db.add(new_product)
@@ -1700,8 +1801,8 @@ class AdminService:
                     quantity=quantity_per_size,
                     quantity_exhibition=0,
                     location_name=warehouse.name if warehouse else "Unknown",
-                    created_at=now,    
-                    updated_at=now 
+                    created_at=deatetime.now(),
+                    updated_at=deatetime.now() 
                 )
                 self.db.add(product_size)
             

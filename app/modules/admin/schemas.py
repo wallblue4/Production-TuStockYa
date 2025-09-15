@@ -580,3 +580,148 @@ class PaymentRegistrationResponse(BaseModel):
     next_due_date: Optional[date]
     message: str
     total_paid_amount: Decimal
+
+# ==================== 🆕 SCHEMAS PARA TALLAS ESPECÍFICAS + IMAGEN ====================
+
+class SizeQuantityEntry(BaseModel):
+    """Entrada específica de cantidad por talla"""
+    size: str = Field(..., min_length=1, max_length=10, description="Talla específica (ej: 39, 40, 41)")
+    quantity: int = Field(..., gt=0, description="Cantidad exacta para esta talla")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "size": "40",
+                "quantity": 5
+            }
+        }
+
+class VideoProductEntryWithSizes(BaseModel):
+    """Entrada de producto con tallas específicas e imagen de referencia"""
+    warehouse_location_id: int = Field(..., description="ID de bodega destino")
+    
+    # 🆕 TALLAS CON CANTIDADES ESPECÍFICAS
+    size_quantities: List[SizeQuantityEntry] = Field(
+        ..., 
+        min_items=1, 
+        max_items=15,
+        description="Cantidades específicas por talla"
+    )
+    
+    # Información del producto
+    product_brand: Optional[str] = Field(None, max_length=255, description="Marca del producto")
+    product_model: Optional[str] = Field(None, max_length=255, description="Modelo del producto")
+    notes: Optional[str] = Field(None, max_length=1000, description="Notas adicionales")
+    
+    @validator('size_quantities')
+    def validate_sizes(cls, v):
+        if not v:
+            raise ValueError("Debe especificar al menos una talla")
+        
+        # Verificar que no haya tallas duplicadas
+        sizes_seen = set()
+        for sq in v:
+            if sq.size in sizes_seen:
+                raise ValueError(f"Talla duplicada: {sq.size}")
+            sizes_seen.add(sq.size)
+        
+        total_quantity = sum([sq.quantity for sq in v])
+        if total_quantity <= 0:
+            raise ValueError("La cantidad total debe ser mayor a 0")
+        if total_quantity > 1000:
+            raise ValueError("La cantidad total no puede superar 1000 unidades")
+            
+        return v
+    
+    @property
+    def total_quantity(self) -> int:
+        """Calcular cantidad total automáticamente"""
+        return sum([sq.quantity for sq in self.size_quantities])
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "warehouse_location_id": 1,
+                "size_quantities": [
+                    {"size": "39", "quantity": 3},
+                    {"size": "40", "quantity": 8},
+                    {"size": "41", "quantity": 6},
+                    {"size": "42", "quantity": 3}
+                ],
+                "product_brand": "Nike",
+                "product_model": "Air Max 90",
+                "notes": "Ingreso de inventario nuevo modelo"
+            }
+        }
+
+class ProductCreationResponse(BaseModel):
+    """Respuesta de creación de producto con imagen de referencia"""
+    success: bool
+    product_id: int
+    reference_code: str
+    
+    # 🆕 IMAGEN DE REFERENCIA
+    image_url: Optional[str] = Field(None, description="URL de imagen de referencia en Cloudinary")
+    
+    # Información del producto creado
+    brand: str
+    model: str
+    total_quantity: int
+    warehouse_name: str
+    
+    # Tallas creadas
+    sizes_created: List[SizeQuantityEntry]
+    
+    # IA Results (si se procesó video)
+    ai_confidence_score: Optional[float] = None
+    ai_detected_info: Optional[Dict[str, Any]] = None
+    
+    # Metadatos
+    created_by_user_id: int
+    created_by_name: str
+    created_at: datetime
+    processing_time_seconds: Optional[float] = None
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "success": True,
+                "product_id": 123,
+                "reference_code": "NIKE-AIR90-ABC123",
+                "image_url": "https://res.cloudinary.com/tustockya/image/upload/v1234567890/products/NIKE-AIR90-ABC_12345678.jpg",
+                "brand": "Nike",
+                "model": "Air Max 90",
+                "total_quantity": 20,
+                "warehouse_name": "Bodega Central",
+                "sizes_created": [
+                    {"size": "39", "quantity": 3},
+                    {"size": "40", "quantity": 8}
+                ],
+                "ai_confidence_score": 0.95,
+                "created_by_user_id": 1,
+                "created_by_name": "Admin Usuario",
+                "created_at": "2025-09-14T10:30:00",
+                "processing_time_seconds": 45.2
+            }
+        }
+
+# ==================== 🆕 SCHEMA PARA RESPUESTA DE ERROR ====================
+
+class ProductCreationError(BaseModel):
+    """Respuesta de error en creación de producto"""
+    success: bool = False
+    error_type: str  # "validation", "cloudinary", "ai_processing", "database"
+    error_message: str
+    details: Optional[Dict[str, Any]] = None
+    timestamp: datetime = Field(default_factory=datetime.now)
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "success": False,
+                "error_type": "cloudinary",
+                "error_message": "Error subiendo imagen de referencia",
+                "details": {"cloudinary_error": "Invalid image format"},
+                "timestamp": "2025-09-14T10:30:00"
+            }
+        }
