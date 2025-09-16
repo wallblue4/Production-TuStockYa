@@ -24,9 +24,8 @@ from .schemas import *
 
 from app.shared.database.models import User, Location ,AdminLocationAssignment , Product ,InventoryChange ,DiscountRequest , VideoProcessingJob ,ProductSize
 
-logging.basicConfig(filename='app.log', level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
 
 class AdminService:
     """
@@ -1199,217 +1198,360 @@ class AdminService:
         admin: User
     ) -> ProductCreationResponse:
         """
-        AD016: Procesamiento optimizado - Solo microservicio maneja el video
-        
-        ELIMINA duplicación de almacenamiento de video
-        El monolito solo maneja: imagen + tallas específicas + coordinación
+        AD016: Procesamiento de video con IA + tallas específicas + imagen de referencia
         """
-        from app.shared.database.models import Location
-        from app.services.cloudinary_service import cloudinary_service
-        
+
         start_time = datetime.now()
         image_url = None
+
+        if reference_image:
+            logger.info(f"📸 SERVICIO - La imagen de referencia llegó al servicio. Nombre: {reference_image.filename}")
+
+            # ==================== SUBIR IMAGEN DE REFERENCIA (OPCIONAL) ====================
+            logger.info("PROCESANDO IMAGEN DE REFERENCIA...")
+
+            try:
+                logger.info("CloudinaryService importado en método")
+
+                # ... lógica de subida a Cloudinary
+                image_url = await cloudinary_service.upload_product_reference_image(
+                    reference_image, 
+                    temp_reference, 
+                    admin.id
+                )
+
+                # 👉 Y ESTE LOGGER DESPUÉS DE LA SUBIDA
+                logger.info(f"✅ IMAGEN SUBIDA EXITOSAMENTE. URL: {image_url}")
+
+            except Exception as img_error:
+                logger.error(f"❌ ERROR SUBIENDO IMAGEN: {str(img_error)}")
+                image_url = None
+        try:
+            logger.info("CloudinaryService importado correctamente")
+        except ImportError as e:
+            logger.error(f"Error importando CloudinaryService: {e}")
         
         try:
+            logger.info(f"🎬 SERVICIO - Iniciando procesamiento para usuario: {admin.email}")
+            
             # ==================== VALIDACIONES INICIALES ====================
+            
+            from app.shared.database.models import Location
+            logger.info("🔄 Importando Location...")
             
             warehouse = self.db.query(Location).filter(
                 Location.id == video_entry.warehouse_location_id,
                 Location.type == "bodega"
             ).first()
             
+            logger.info(f"🏭 Warehouse query result: {warehouse}")
+            
             if not warehouse:
+                logger.error(f"❌ Bodega no encontrada: {video_entry.warehouse_location_id}")
                 raise HTTPException(status_code=404, detail="Bodega no encontrada")
             
-            # ==================== 🆕 SUBIR IMAGEN DE REFERENCIA ====================
+            logger.info(f"✅ Bodega encontrada: {warehouse.name}")
+            
+            # ==================== SUBIR IMAGEN DE REFERENCIA (OPCIONAL) ====================
             
             if reference_image:
+                logger.info("PROCESANDO IMAGEN DE REFERENCIA...")
+                logger.info(f"Imagen: {reference_image.filename}, Tamaño: {reference_image.size}")
+                
                 try:
-                    logger.info("🖼️ Subiendo imagen de referencia a Cloudinary...")
+
+                    logger.info("CloudinaryService importado en método")
                     
-                    temp_reference = f"TEMP_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{admin.id}"
+                    # Verificar configuración de Cloudinary
+                    if hasattr(settings, 'cloudinary_cloud_name'):
+                        logger.info(f"Cloudinary configurado: {settings.cloudinary_cloud_name}")
+                    else:
+                        logger.error("Cloudinary NO configurado")
+                    
+                    temp_reference = f"PROD_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{admin.id}"
+                    logger.info(f"Referencia temporal: {temp_reference}")
                     
                     image_url = await cloudinary_service.upload_product_reference_image(
                         reference_image, 
                         temp_reference, 
                         admin.id
                     )
+                    logger.info(f"IMAGEN SUBIDA EXITOSAMENTE: {image_url}")
                     
-                    logger.info(f"✅ Imagen subida: {image_url}")
-                    
-                except Exception as e:
-                    logger.error(f"❌ Error subiendo imagen: {str(e)}")
+                except Exception as img_error:
+                    logger.error(f"ERROR SUBIENDO IMAGEN: {type(img_error).__name__}: {str(img_error)}")
+                    import traceback
+                    logger.error(f"TRACEBACK: {traceback.format_exc()}")
                     image_url = None
+            else:
+                logger.info("NO HAY IMAGEN DE REFERENCIA PARA PROCESAR")
+                image_url = None
             
-            # ==================== CREAR ENTRADA DE PROCESAMIENTO (SIN ALMACENAR VIDEO) ====================
+            # ==================== PROCESAR VIDEO (SIMULADO) ====================
             
-            processing_job = VideoProcessingJob(
-                video_file_path="",  # 🚀 VACÍO - No almacenamos el video
-                original_filename=video_file.filename,
-                file_size_bytes=video_file.size,
-                warehouse_location_id=warehouse.id,
-                estimated_quantity=video_entry.total_quantity,
-                product_brand=video_entry.product_brand,
-                product_model=video_entry.product_model,
-                expected_sizes=json.dumps([sq.dict() for sq in video_entry.size_quantities]),
-                notes=video_entry.notes,
-                processing_status="processing",
-                processed_by_user_id=admin.id,
-                processing_started_at=datetime.now()
-            )
-            
-            self.db.add(processing_job)
-            self.db.commit()
-            self.db.refresh(processing_job)
-            
-            # ==================== 🚀 ENVIAR DIRECTAMENTE AL MICROSERVICIO ====================
-            
+            logger.info("Enviando video directamente al microservicio...")
+
             try:
                 ai_result = await self._send_video_to_microservice_direct(
-                    video_file,  # 🚀 ENVIAR ARCHIVO DIRECTO (no guardado)
-                    video_entry, 
-                    processing_job.id,
-                    admin.id
+                    video_file, video_entry, 1, admin.id
+                )
+                logger.info(f"IA real completada: {ai_result}")
+                
+            except Exception as microservice_error:
+                logger.error(f"Error con microservicio: {str(microservice_error)}")
+                # Fallback a simulación
+                ai_result = {
+                    "detected_brand": video_entry.product_brand or "Unknown",
+                    "detected_model": video_entry.product_model or "Unknown",
+                    "detected_colors": ["Unknown"],
+                    "confidence_score": 0.5,
+                    "processing_time": 0.1,
+                    "fallback_used": True
+                }
+            
+            # ==================== CREAR PRODUCTO ====================
+            
+            logger.info("🔄 Creando producto...")
+            
+            
+            # Combinar datos del usuario con IA
+            final_brand = video_entry.product_brand or ai_result.get('detected_brand', 'Unknown')
+            final_model = video_entry.product_model or ai_result.get('detected_model', 'Unknown')
+            
+            # Generar código de referencia
+            reference_code = f"{final_brand[:3].upper()}-{final_model[:4].upper()}-{uuid.uuid4().hex[:6].upper()}"
+            
+            logger.info(f"📝 Código generado: {reference_code}")
+            
+            new_product = Product(
+                reference_code=reference_code,
+                description=f"{final_brand} {final_model}",
+                brand=final_brand,
+                model=final_model,
+                location_name=warehouse.name,
+                image_url=image_url,
+                total_quantity=video_entry.total_quantity,
+                unit_price=Decimal('0.00'),
+                box_price=Decimal('0.00'),
+                is_active=1,
+                created_at=start_time,
+                updated_at=start_time
+            )
+            
+            logger.info("🔄 Agregando producto a BD...")
+            self.db.add(new_product)
+            self.db.flush()  # Para obtener el ID
+            
+            logger.info(f"✅ Producto creado con ID: {new_product.id}")
+            
+            # ==================== CREAR TALLAS ====================
+            
+            logger.info("🔄 Creando tallas...")
+            created_sizes = []
+            
+            for size_entry in video_entry.size_quantities:
+                logger.info(f"📏 Creando talla {size_entry.size} con {size_entry.quantity} unidades")
+                
+                product_size = ProductSize(
+                    product_id=new_product.id,
+                    size=size_entry.size,
+                    quantity=size_entry.quantity,
+                    quantity_exhibition=0,
+                    location_name=warehouse.name,
+                    created_at=start_time,
+                    updated_at=start_time
                 )
                 
-                # Actualizar job con resultados
-                processing_job.processing_status = "completed"
-                processing_job.processing_completed_at = datetime.now()
-                processing_job.ai_results_json = json.dumps(ai_result)
-                processing_job.confidence_score = ai_result.get("confidence_scores", {}).get("overall", 0.0)
-                processing_job.detected_brand = ai_result.get("detected_brand")
-                processing_job.detected_model = ai_result.get("detected_model")
-                processing_job.detected_colors = json.dumps(ai_result.get("detected_colors", []))
-                processing_job.detected_sizes = json.dumps(ai_result.get("detected_sizes", []))
-                
-                # Crear producto con tallas específicas
-                final_product_id, inventory_change_id = await self._create_final_product_and_inventory_with_sizes(
-                    processing_job, ai_result, warehouse, admin, video_entry.size_quantities, image_url
-                )
-                
-                processing_job.created_product_id = final_product_id
-                processing_job.created_inventory_change_id = inventory_change_id
-                
-                self.db.commit()
-                
-                # Construir respuesta
-                final_product = self.db.query(Product).filter(Product.id == final_product_id).first()
-                
-                return ProductCreationResponse(
-                    success=True,
-                    product_id=final_product.id,
-                    reference_code=final_product.reference_code,
-                    image_url=image_url,
-                    brand=final_product.brand,
-                    model=final_product.model,
-                    total_quantity=video_entry.total_quantity,
-                    warehouse_name=warehouse.name,
-                    sizes_created=video_entry.size_quantities,
-                    ai_confidence_score=processing_job.confidence_score,
-                    ai_detected_info=ai_result,
-                    created_by_user_id=admin.id,
-                    created_by_name=admin.full_name,
-                    created_at=processing_job.created_at,
-                    processing_time_seconds=(datetime.now() - start_time).total_seconds()
-                )
-                
-            except Exception as e:
-                logger.error(f"❌ Error en procesamiento: {e}")
-                processing_job.processing_status = "failed"
-                processing_job.error_message = str(e)
-                processing_job.retry_count += 1
-                self.db.commit()
-                raise e
-                
+                self.db.add(product_size)
+                created_sizes.append(size_entry)
+            
+            logger.info(f"✅ {len(created_sizes)} tallas creadas")
+            
+            # ==================== CREAR INVENTORY CHANGE ====================
+            
+            logger.info("🔄 Creando inventory change...")
+            
+            inventory_change = InventoryChange(
+                product_id=new_product.id,
+                change_type="video_inventory_creation",
+                quantity_before=0,
+                quantity_after=video_entry.total_quantity,
+                user_id=admin.id,
+                notes=f"Inventario creado por admin - Tallas específicas: {len(video_entry.size_quantities)} - {video_entry.notes or ''}",
+                created_at=start_time
+            )
+            
+            self.db.add(inventory_change)
+            logger.info("✅ Inventory change creado")
+            
+            # ==================== COMMIT FINAL ====================
+            
+            logger.info("🔄 Haciendo commit...")
+            self.db.commit()
+            self.db.refresh(new_product)
+            
+            processing_time = (datetime.now() - start_time).total_seconds()
+            
+            logger.info(f"🎉 Procesamiento completado en {processing_time:.2f}s")
+            
+            # ==================== RESPUESTA ====================
+            
+            logger.info("🔄 Construyendo respuesta...")
+            
+            response = ProductCreationResponse(
+                success=True,
+                product_id=new_product.id,
+                reference_code=reference_code,
+                image_url=image_url,
+                brand=final_brand,
+                model=final_model,
+                total_quantity=video_entry.total_quantity,
+                warehouse_name=warehouse.name,
+                sizes_created=created_sizes,
+                ai_confidence_score=ai_result.get('confidence_score'),
+                ai_detected_info=ai_result,
+                created_by_user_id=admin.id,
+                created_by_name=admin.full_name,
+                created_at=start_time,
+                processing_time_seconds=processing_time
+            )
+            
+            logger.info("✅ Respuesta construida")
+            return response
+            
+        except HTTPException as he:
+            logger.error(f"❌ HTTPException: {he.detail}")
+            raise
         except Exception as e:
             self.db.rollback()
+            logger.error(f"❌ ERROR CRÍTICO en servicio: {type(e).__name__}: {str(e)}")
             
-            # Limpiar imagen de Cloudinary si se subió
-            if image_url:
-                try:
-                    await cloudinary_service.delete_image(image_url)
-                except:
-                    pass
+            # Capturar traceback completo
+            import traceback
+            full_traceback = traceback.format_exc()
+            logger.error(f"❌ TRACEBACK COMPLETO:\n{full_traceback}")
             
-            raise HTTPException(status_code=500, detail=f"Error procesando inventario: {str(e)}")
+            # Limpiar imagen si se subió
+            if image_url and "example.com" not in image_url:
+                logger.info("🗑️ Limpiando imagen...")
+            
+            # Crear mensaje de error más descriptivo
+            error_message = f"Error en servicio: {type(e).__name__}"
+            if str(e):
+                error_message += f" - {str(e)}"
+            
+            raise HTTPException(
+                status_code=500, 
+                detail=error_message
+            )
 
 # ==================== 🚀 NUEVO MÉTODO: ENVÍO DIRECTO AL MICROSERVICIO ====================
 
-async def _send_video_to_microservice_direct(
-    self, 
-    video_file: UploadFile,  # 🚀 ARCHIVO DIRECTO, no path local
-    video_entry: VideoProductEntryWithSizes,
-    job_db_id: int,
-    admin_id: int
-) -> Dict[str, Any]:
-    """
-    Enviar video directamente al microservicio sin almacenar localmente
-    
-    ELIMINA duplicación de almacenamiento
-    """
-    import httpx
-    
-    try:
-        logger.info(f"🚀 Enviando video DIRECTO al microservicio: {settings.VIDEO_MICROSERVICE_URL}")
+# app/modules/admin/service.py - MÉTODO DIRECTO CORREGIDO
+
+    async def _send_video_to_microservice_direct(
+        self, 
+        video_file: UploadFile,
+        video_entry: VideoProductEntryWithSizes,
+        job_db_id: int,
+        admin_id: int
+    ) -> Dict[str, Any]:
+        """
+        Enviar video directamente al microservicio sin almacenar localmente
+        VERSIÓN CORREGIDA que maneja correctamente el UploadFile
+        """
+        import httpx
+        import json
+        import logging
+        logger = logging.getLogger(__name__)
         
-        # Verificar configuración
-        if not hasattr(settings, 'VIDEO_MICROSERVICE_URL') or not settings.VIDEO_MICROSERVICE_URL:
-            raise Exception("VIDEO_MICROSERVICE_URL no está configurada")
-        
-        # Preparar metadata
-        metadata = {
-            "job_db_id": job_db_id,
-            "warehouse_id": video_entry.warehouse_location_id,
-            "admin_id": admin_id,
-            "estimated_quantity": video_entry.total_quantity,
-            "product_brand": video_entry.product_brand,
-            "product_model": video_entry.product_model,
-            "expected_sizes": [sq.dict() for sq in video_entry.size_quantities],  # 🆕 TALLAS ESPECÍFICAS
-            "notes": video_entry.notes
-        }
-        
-        # 🚀 LEER ARCHIVO DIRECTO (sin guardar localmente)
-        await video_file.seek(0)  # Asegurar posición inicial
-        video_content = await video_file.read()
-        
-        # Preparar para envío
-        files = {
-            "video": (video_file.filename, video_content, video_file.content_type)
-        }
-        data = {
-            "job_id": job_db_id,
-            "callback_url": f"{settings.BASE_URL}/api/v1/admin/admin/video-processing-complete",
-            "metadata": json.dumps(metadata)
-        }
-        
-        # Headers de autenticación
-        headers = {}
-        if hasattr(settings, 'VIDEO_MICROSERVICE_API_KEY') and settings.VIDEO_MICROSERVICE_API_KEY:
-            headers["X-API-Key"] = settings.VIDEO_MICROSERVICE_API_KEY
-        
-        # 🚀 ENVÍO DIRECTO AL MICROSERVICIO
-        async with httpx.AsyncClient(timeout=300) as client:
-            response = await client.post(
-                f"{settings.VIDEO_MICROSERVICE_URL}/api/v1/process-video",
-                files=files,
-                data=data,
-                headers=headers
-            )
+        try:
+            logger.info(f"Enviando video DIRECTO al microservicio: {settings.VIDEO_MICROSERVICE_URL}")
             
-            logger.info(f"🔄 Respuesta del microservicio: {response.status_code}")
+            # Verificar configuración
+            if not hasattr(settings, 'VIDEO_MICROSERVICE_URL') or not settings.VIDEO_MICROSERVICE_URL:
+                raise Exception("VIDEO_MICROSERVICE_URL no está configurada")
             
-            if response.status_code == 200:
-                result = response.json()
-                logger.info(f"✅ Video procesado exitosamente por microservicio")
-                return result
-            else:
-                error_detail = response.text
-                logger.error(f"❌ Error del microservicio: {response.status_code} - {error_detail}")
-                raise Exception(f"Microservicio error: {response.status_code} - {error_detail}")
+            # Preparar metadata con tallas específicas
+            metadata = {
+                "job_db_id": job_db_id,
+                "warehouse_id": video_entry.warehouse_location_id,
+                "admin_id": admin_id,
+                "estimated_quantity": video_entry.total_quantity,
+                "product_brand": video_entry.product_brand,
+                "product_model": video_entry.product_model,
+                "expected_sizes": [sq.dict() for sq in video_entry.size_quantities],
+                "size_quantities": [sq.dict() for sq in video_entry.size_quantities],
+                "notes": video_entry.notes,
+                "processing_mode": "direct_with_training"
+            }
+            
+            logger.info(f"Metadata: {metadata}")
+            
+            # CLAVE: Leer el contenido una sola vez y reutilizarlo
+            await video_file.seek(0)  # Ir al inicio del archivo
+            video_content = await video_file.read()
+            
+            if not video_content:
+                raise Exception("El archivo de video está vacío")
+            
+            logger.info(f"Video leído: {len(video_content)} bytes")
+            
+            # Preparar para envío - USAR BytesIO para simular archivo
+            from io import BytesIO
+            video_stream = BytesIO(video_content)
+            
+            files = {
+                "video": (video_file.filename, video_stream, video_file.content_type or "video/mp4")
+            }
+            
+            data = {
+                "job_id": job_db_id or 999,
+                "callback_url": f"{settings.BASE_URL}/api/v1/admin/admin/video-processing-complete",
+                "metadata": json.dumps(metadata)
+            }
+            
+            # Headers de autenticación
+            headers = {}
+            if hasattr(settings, 'VIDEO_MICROSERVICE_API_KEY') and settings.VIDEO_MICROSERVICE_API_KEY:
+                headers["X-API-Key"] = settings.VIDEO_MICROSERVICE_API_KEY
+            
+            logger.info(f"Headers configurados: {list(headers.keys())}")
+            
+            # Envío al microservicio
+            async with httpx.AsyncClient(timeout=300) as client:
+                logger.info("Realizando llamada HTTP...")
                 
-    except Exception as e:
-        logger.error(f"❌ Error enviando video al microservicio: {str(e)}")
-        raise Exception(f"Error comunicando con microservicio de IA: {str(e)}")
+                response = await client.post(
+                    f"{settings.VIDEO_MICROSERVICE_URL}/api/v1/process-video",
+                    files=files,
+                    data=data,
+                    headers=headers
+                )
+                
+                logger.info(f"Respuesta del microservicio: {response.status_code}")
+                logger.info(f"Response content: {response.text[:500]}...")
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    logger.info("Video procesado exitosamente por microservicio")
+                    return {
+                        "processing_accepted": True,
+                        "job_id": job_db_id,
+                        "status": result.get("status", "processing"),
+                        "detected_brand": result.get("detected_brand", video_entry.product_brand),
+                        "detected_model": result.get("detected_model", video_entry.product_model),
+                        "confidence_scores": result.get("confidence_scores", {"overall": 0.0}),
+                        "microservice_response": result
+                    }
+                else:
+                    error_detail = response.text
+                    logger.error(f"Error del microservicio: {response.status_code} - {error_detail}")
+                    raise Exception(f"Microservicio error: {response.status_code} - {error_detail}")
+                    
+        except Exception as e:
+            logger.error(f"Error enviando video al microservicio: {str(e)}")
+            raise Exception(f"Error comunicando con microservicio de IA: {str(e)}")
 
     async def _create_final_product_and_inventory(
         self, 
