@@ -612,6 +612,8 @@ class VideoProductEntryWithSizes(BaseModel):
     product_brand: Optional[str] = Field(None, max_length=255, description="Marca del producto")
     product_model: Optional[str] = Field(None, max_length=255, description="Modelo del producto")
     notes: Optional[str] = Field(None, max_length=1000, description="Notas adicionales")
+    unit_price: Decimal = Field(..., gt=0, description="Precio unitario del producto")
+    box_price: Optional[Decimal] = Field(None, ge=0, description="Precio por caja (opcional)")
     
     @validator('size_quantities')
     def validate_sizes(cls, v):
@@ -671,6 +673,9 @@ class ProductCreationResponse(BaseModel):
     
     # Tallas creadas
     sizes_created: List[SizeQuantityEntry]
+    unit_price: float = Field(..., description="Precio unitario del producto")
+    box_price: Optional[float] = Field(None, description="Precio por caja del producto")
+    
     
     # IA Results (si se procesó video)
     ai_confidence_score: Optional[float] = None
@@ -681,6 +686,7 @@ class ProductCreationResponse(BaseModel):
     created_by_name: str
     created_at: datetime
     processing_time_seconds: Optional[float] = None
+
     
     class Config:
         schema_extra = {
@@ -693,6 +699,8 @@ class ProductCreationResponse(BaseModel):
                 "model": "Air Max 90",
                 "total_quantity": 20,
                 "warehouse_name": "Bodega Central",
+                "unit_price": 250000.00,  
+                "box_price": 1200000.00,  
                 "sizes_created": [
                     {"size": "39", "quantity": 3},
                     {"size": "40", "quantity": 8}
