@@ -851,6 +851,8 @@ async def process_video_inventory_entry(
     warehouse_location_id: int = Form(..., description="ID de bodega destino"),
     size_quantities_json: str = Form(..., description="JSON con tallas y cantidades: [{'size':'39','quantity':5}]"),
     product_brand: Optional[str] = Form(None, description="Marca del producto"),
+    unit_price: float = Form(..., description="Precio unitario del producto"),
+    box_price: Optional[float] = Form(None, description="Precio por caja (opcional)"),
     product_model: Optional[str] = Form(None, description="Modelo del producto"),
     notes: Optional[str] = Form(None, description="Notas adicionales"),
     reference_image: Optional[UploadFile] = File(None, description="Imagen de referencia del producto"),
@@ -925,6 +927,17 @@ async def process_video_inventory_entry(
         if reference_image.size > settings.max_image_size:
             raise HTTPException(status_code=400, detail="Imagen no debe superar 10MB")
 
+    if unit_price <= 0:
+        raise HTTPException(status_code=400, detail="El precio unitario debe ser mayor a 0")
+    if unit_price > 9999999.99:
+        raise HTTPException(status_code=400, detail="El precio unitario no puede superar $9,999,999.99")
+    
+    if box_price is not None:
+        if box_price < 0:
+            raise HTTPException(status_code=400, detail="El precio por caja no puede ser negativo")
+        if box_price > 9999999.99:
+            raise HTTPException(status_code=400, detail="El precio por caja no puede superar $9,999,999.99")
+
     # Parsear y validar tallas con cantidades
     try:
         size_quantities_data = json.loads(size_quantities_json)
@@ -940,6 +953,8 @@ async def process_video_inventory_entry(
         size_quantities=size_quantities,
         product_brand=product_brand,
         product_model=product_model,
+        unit_price=Decimal(str(unit_price)),  
+        box_price=Decimal(str(box_price)) if box_price is not None else None,
         notes=notes
     )
 

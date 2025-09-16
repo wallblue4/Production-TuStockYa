@@ -1317,6 +1317,8 @@ class AdminService:
             # Combinar datos del usuario con IA
             final_brand = video_entry.product_brand or ai_result.get('detected_brand', 'Unknown')
             final_model = video_entry.product_model or ai_result.get('detected_model', 'Unknown')
+            logger.info(f"💰 Precio unitario: ${video_entry.unit_price}")
+            logger.info(f"📦 Precio por caja: ${video_entry.box_price}")
             
             # Generar código de referencia
             reference_code = f"{final_brand[:3].upper()}-{final_model[:4].upper()}-{uuid.uuid4().hex[:6].upper()}"
@@ -1331,8 +1333,8 @@ class AdminService:
                 location_name=warehouse.name,
                 image_url=image_url,
                 total_quantity=video_entry.total_quantity,
-                unit_price=Decimal('0.00'),
-                box_price=Decimal('0.00'),
+                unit_price=video_entry.unit_price,
+                box_price=video_entry.box_price or Decimal('0.00'),
                 is_active=1,
                 created_at=start_time,
                 updated_at=start_time
