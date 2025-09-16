@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = int(os.getenv("PORT", 10000))
 
+    # CORS Configuration
+    allowed_origins: list = os.getenv(
+        "CORS_ALLOWED_ORIGINS", 
+        "http://localhost:3000,https://tustockya.com"
+    ).split(",")
+    
     VIDEO_MICROSERVICE_URL: str = os.getenv(
         "VIDEO_MICROSERVICE_URL", 
         "https://video-processing-microservice.onrender.com"  
