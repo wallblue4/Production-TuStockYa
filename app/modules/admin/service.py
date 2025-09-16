@@ -1415,7 +1415,9 @@ class AdminService:
                 created_by_user_id=admin.id,
                 created_by_name=admin.full_name,
                 created_at=start_time,
-                processing_time_seconds=processing_time
+                processing_time_seconds=processing_time,
+                unit_price=float(new_product.unit_price),  # Para serializar correctamente
+                box_price=float(new_product.box_price) if new_product.box_price else None
             )
             
             logger.info("✅ Respuesta construida")
