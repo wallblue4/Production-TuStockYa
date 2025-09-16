@@ -5,7 +5,7 @@ from typing import Optional, List
 from datetime import datetime, date
 from sqlalchemy import func
 
-
+from app.config.settings import settings
 from app.config.database import get_db
 from app.core.auth.dependencies import get_current_user, require_roles
 from app.shared.database.models import (
@@ -792,7 +792,59 @@ async def get_system_overview(
         }
     }
 
-# app/modules/admin/router.py - ENDPOINT ACTUALIZADO
+
+@router.get("/test-microservice-basic")
+async def test_microservice_basic(
+    current_user: User = Depends(require_roles(["administrador", "boss"]))
+):
+    """Test básico de conectividad"""
+    import httpx
+    from app.config.settings import settings
+    
+    microservice_url = getattr(settings, 'VIDEO_MICROSERVICE_URL', None)
+    
+    if not microservice_url:
+        return {"error": "VIDEO_MICROSERVICE_URL no configurada"}
+    
+    tests = {}
+    
+    # Test 1: Ping básico
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(f"{microservice_url}/")
+            tests["root_endpoint"] = {
+                "status": response.status_code,
+                "content": response.text[:200]
+            }
+    except Exception as e:
+        tests["root_endpoint"] = {"error": str(e)}
+    
+    # Test 2: Health endpoint
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(f"{microservice_url}/health")
+            tests["health_endpoint"] = {
+                "status": response.status_code,
+                "content": response.text[:200]
+            }
+    except Exception as e:
+        tests["health_endpoint"] = {"error": str(e)}
+    
+    # Test 3: Process video endpoint (sin archivo)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(f"{microservice_url}/api/v1/process-video")
+            tests["process_video_endpoint"] = {
+                "status": response.status_code,
+                "content": response.text[:200]
+            }
+    except Exception as e:
+        tests["process_video_endpoint"] = {"error": str(e)}
+    
+    return {
+        "microservice_url": microservice_url,
+        "tests": tests
+    }
 
 @router.post("/inventory/video-entry", response_model=ProductCreationResponse)
 async def process_video_inventory_entry(
@@ -806,6 +858,8 @@ async def process_video_inventory_entry(
     current_user: User = Depends(require_roles(["administrador", "boss"])),
     db: Session = Depends(get_db)
 ):
+
+
     """
     AD016: Registro de inventario con video IA + tallas específicas + imagen de referencia
     
@@ -853,6 +907,8 @@ async def process_video_inventory_entry(
     - Buena calidad y iluminación
     """
     service = AdminService(db)
+    import logging
+    logger = logging.getLogger(__name__)
 
     # Validar archivo de video
     if not video_file.content_type.startswith('video/'):
