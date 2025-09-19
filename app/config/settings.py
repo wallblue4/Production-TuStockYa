@@ -36,8 +36,12 @@ class Settings(BaseSettings):
     # CORS Configuration
     allowed_origins: list = os.getenv(
         "CORS_ALLOWED_ORIGINS", 
-        "http://localhost:3000,https://tustockya.com"
+        "http://localhost:3000,http://localhost:8080,https://tustockya.com,https://www.tustockya.com"
     ).split(",")
+    
+    # Additional CORS settings
+    cors_allow_credentials: bool = True
+    cors_max_age: int = 3600
     
     VIDEO_MICROSERVICE_URL: str = os.getenv(
         "VIDEO_MICROSERVICE_URL", 
