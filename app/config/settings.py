@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # CORS Configuration
     allowed_origins: list = os.getenv(
         "CORS_ALLOWED_ORIGINS", 
-        "http://localhost:3000,http://localhost:8080,https://tustockya.com,https://www.tustockya.com"
+        "http://localhost:3000,https://tustockya.com,https://www.tustockya.com"
     ).split(",")
     
     # Additional CORS settings

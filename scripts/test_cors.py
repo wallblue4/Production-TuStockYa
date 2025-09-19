@@ -20,9 +20,10 @@ def test_cors_configuration(base_url: str = "http://localhost:8000") -> Dict:
     # Test cases: (origin, should_be_allowed)
     test_origins = [
         ("http://localhost:3000", True),   # Should be allowed
-        ("http://localhost:8080", True),   # Should be allowed  
         ("https://tustockya.com", True),   # Should be allowed
         ("https://www.tustockya.com", True),   # Should be allowed
+        ("https://app.tustockya.com", False),  # Should be blocked (removed from allowed)
+        ("http://localhost:8080", False),  # Should be blocked (removed from allowed)
         ("https://malicious-site.com", False),  # Should be blocked
         ("http://evil.com", False),        # Should be blocked
         (None, True),                      # No origin (direct API call)
