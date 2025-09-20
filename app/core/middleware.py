@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from app.config.settings import settings
 import time
 import logging
 
@@ -8,14 +9,22 @@ logger = logging.getLogger(__name__)
 
 def setup_middleware(app: FastAPI):
     """Configure all middleware for the application"""
-    
-    # CORS
+
+    # CORS - Enhanced security configuration
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Configure properly for production
+        allow_origins=settings.allowed_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type", 
+            "Accept",
+            "Origin",
+            "X-Requested-With",
+            "X-CSRF-Token"
+        ],
+        max_age=3600  # Cache preflight requests for 1 hour
     )
     
     # Trusted hosts (configure for production)
