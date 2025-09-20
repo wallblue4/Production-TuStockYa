@@ -5,7 +5,7 @@ from typing import Optional, List
 from datetime import datetime, date
 from sqlalchemy import func
 
-
+from app.config.settings import settings
 from app.config.database import get_db
 from app.core.auth.dependencies import get_current_user, require_roles
 from app.shared.database.models import (
@@ -792,13 +792,67 @@ async def get_system_overview(
         }
     }
 
-# app/modules/admin/router.py - ENDPOINT ACTUALIZADO
+
+@router.get("/test-microservice-basic")
+async def test_microservice_basic(
+    current_user: User = Depends(require_roles(["administrador", "boss"]))
+):
+    """Test básico de conectividad"""
+    import httpx
+    from app.config.settings import settings
+    
+    microservice_url = getattr(settings, 'VIDEO_MICROSERVICE_URL', None)
+    
+    if not microservice_url:
+        return {"error": "VIDEO_MICROSERVICE_URL no configurada"}
+    
+    tests = {}
+    
+    # Test 1: Ping básico
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(f"{microservice_url}/")
+            tests["root_endpoint"] = {
+                "status": response.status_code,
+                "content": response.text[:200]
+            }
+    except Exception as e:
+        tests["root_endpoint"] = {"error": str(e)}
+    
+    # Test 2: Health endpoint
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(f"{microservice_url}/health")
+            tests["health_endpoint"] = {
+                "status": response.status_code,
+                "content": response.text[:200]
+            }
+    except Exception as e:
+        tests["health_endpoint"] = {"error": str(e)}
+    
+    # Test 3: Process video endpoint (sin archivo)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(f"{microservice_url}/api/v1/process-video")
+            tests["process_video_endpoint"] = {
+                "status": response.status_code,
+                "content": response.text[:200]
+            }
+    except Exception as e:
+        tests["process_video_endpoint"] = {"error": str(e)}
+    
+    return {
+        "microservice_url": microservice_url,
+        "tests": tests
+    }
 
 @router.post("/inventory/video-entry", response_model=ProductCreationResponse)
 async def process_video_inventory_entry(
     warehouse_location_id: int = Form(..., description="ID de bodega destino"),
     size_quantities_json: str = Form(..., description="JSON con tallas y cantidades: [{'size':'39','quantity':5}]"),
     product_brand: Optional[str] = Form(None, description="Marca del producto"),
+    unit_price: float = Form(..., description="Precio unitario del producto"),
+    box_price: Optional[float] = Form(None, description="Precio por caja (opcional)"),
     product_model: Optional[str] = Form(None, description="Modelo del producto"),
     notes: Optional[str] = Form(None, description="Notas adicionales"),
     reference_image: Optional[UploadFile] = File(None, description="Imagen de referencia del producto"),
@@ -806,6 +860,8 @@ async def process_video_inventory_entry(
     current_user: User = Depends(require_roles(["administrador", "boss"])),
     db: Session = Depends(get_db)
 ):
+
+
     """
     AD016: Registro de inventario con video IA + tallas específicas + imagen de referencia
     
@@ -853,6 +909,8 @@ async def process_video_inventory_entry(
     - Buena calidad y iluminación
     """
     service = AdminService(db)
+    import logging
+    logger = logging.getLogger(__name__)
 
     # Validar archivo de video
     if not video_file.content_type.startswith('video/'):
@@ -869,6 +927,17 @@ async def process_video_inventory_entry(
         if reference_image.size > settings.max_image_size:
             raise HTTPException(status_code=400, detail="Imagen no debe superar 10MB")
 
+    if unit_price <= 0:
+        raise HTTPException(status_code=400, detail="El precio unitario debe ser mayor a 0")
+    if unit_price > 9999999.99:
+        raise HTTPException(status_code=400, detail="El precio unitario no puede superar $9,999,999.99")
+    
+    if box_price is not None:
+        if box_price < 0:
+            raise HTTPException(status_code=400, detail="El precio por caja no puede ser negativo")
+        if box_price > 9999999.99:
+            raise HTTPException(status_code=400, detail="El precio por caja no puede superar $9,999,999.99")
+
     # Parsear y validar tallas con cantidades
     try:
         size_quantities_data = json.loads(size_quantities_json)
@@ -884,6 +953,8 @@ async def process_video_inventory_entry(
         size_quantities=size_quantities,
         product_brand=product_brand,
         product_model=product_model,
+        unit_price=Decimal(str(unit_price)),  
+        box_price=Decimal(str(box_price)) if box_price is not None else None,
         notes=notes
     )
 
