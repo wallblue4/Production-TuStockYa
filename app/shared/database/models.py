@@ -255,6 +255,8 @@ class TransferRequest(Base):
     courier_notes = Column(Text)
     estimated_pickup_time = Column(Integer)
     pickup_notes = Column(Text)
+    request_type = Column(String(20), default='transfer')
+    original_transfer_id = Column(Integer, ForeignKey('transfer_requests.id'))
     
     # Relationships
     requester = relationship("User", foreign_keys=[requester_id])

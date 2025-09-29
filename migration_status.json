@@ -1,0 +1,24 @@
+{
+  "migration_started": "2025-09-28T00:52:13Z",
+  "phases": {
+    "phase_0_structure": "completed",
+    "phase_1_classification": "pending",
+    "phase_2_sales_separation": "pending",
+    "phase_3_vendor_operations": "pending",
+    "phase_4_remaining_modules": "pending",
+    "phase_5_integration": "pending"
+  },
+  "modules_status": {
+    "admin": "preserved",
+    "auth": "preserved",
+    "classification": "created",
+    "sales_new": "created",
+    "expenses": "created",
+    "discounts": "created",
+    "vendor": "created",
+    "transfers_new": "created",
+    "warehouse_new": "created",
+    "courier": "created",
+    "returns": "created"
+  }
+}

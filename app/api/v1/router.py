@@ -1,10 +1,15 @@
 # app/api/v1/router.py - ACTUALIZADO CON CONTEXTO EXISTENTE
 from fastapi import APIRouter
 from app.api.v1.auth import router as auth_router
+from app.modules.classification.router import router as classification_router
+from app.modules.sales_new.router import router as sales_router
+from app.modules.expenses.router import router as expenses_router
+from app.modules.discounts.router import router as discounts_router
+from app.modules.vendor.router import router as vendor_router
+from app.modules.transfers_new.router import router as transfers_router
+from app.modules.warehouse_new.router import router as warehouse_router 
+from app.modules.courier.router import router as courier_router
 
-# ✅ IMPORTAR MÓDULOS
-from app.modules.sales import sales_router
-from app.modules.transfers.router import router as transfers_router # Importamos el nuevo router de transferencias
 
 from app.modules.admin import admin_router
 
@@ -20,18 +25,7 @@ api_router.include_router(auth_router, prefix="/auth", tags=["authentication"])
 # ==================== NUEVAS RUTAS ====================
 
 # ✅ AGREGAR MÓDULO DE VENTAS
-api_router.include_router(
-    sales_router,
-    prefix="/vendor",  # Prefijo: /api/v1/vendor/...
-    tags=["Vendor - Sales"]
-)
 
-# ✅ AGREGAR MÓDULO DE TRANSFERENCIAS
-api_router.include_router(
-    transfers_router,
-    prefix="/transfers",  # Prefijo: /api/v1/transfers/...
-    tags=["Transfers"]
-)
 
 api_router.include_router(
     admin_router,
@@ -39,6 +33,53 @@ api_router.include_router(
     tags=["Admin - Administrador"]
 )
 
+api_router.include_router(
+    classification_router,
+    prefix="/classify",
+    tags=["Classification"]
+)
+
+api_router.include_router(
+    sales_router,
+    prefix="/sales",
+    tags=["Sales"]
+)
+
+api_router.include_router(
+    expenses_router,
+    prefix="/expenses",
+    tags=["Expenses"]
+)
+
+api_router.include_router(
+    discounts_router,
+    prefix="/discounts",
+    tags=["Discounts"]
+)
+
+api_router.include_router(
+    vendor_router,
+    prefix="/vendor",
+    tags=["Vendor Operations"]
+)
+
+api_router.include_router(
+    transfers_router,
+    prefix="/transfers",
+    tags=["Transfers"]
+)
+
+api_router.include_router(
+    warehouse_router,
+    prefix="/warehouse",
+    tags=["Warehouse Operations"]
+)
+
+api_router.include_router(
+    courier_router,
+    prefix="/courier",
+    tags=["Courier Operations"]
+)
 
 # ==================== ENDPOINTS RAÍZ ACTUALIZADOS ====================
 
