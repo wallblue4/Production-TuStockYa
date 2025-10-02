@@ -34,7 +34,7 @@ class UserResponse(BaseModel):
                 "email": "vendedor@tustockya.com",
                 "first_name": "Juan",
                 "last_name": "Pérez",
-                "role": "vendedor",
+                "role": "seller",
                 "location_id": 1,
                 "location_name": "Local Principal",
                 "is_active": True
@@ -57,7 +57,7 @@ class TokenResponse(BaseModel):
                     "email": "vendedor@tustockya.com",
                     "first_name": "Juan",
                     "last_name": "Pérez",
-                    "role": "vendedor",
+                    "role": "seller",
                     "location_id": 1,
                     "location_name": "Local Principal",
                     "is_active": True
@@ -87,7 +87,7 @@ class UserCreateRequest(BaseModel):
     password: str = Field(..., min_length=6)
     first_name: str = Field(..., min_length=2)
     last_name: str = Field(..., min_length=2)
-    role: str = Field(..., pattern="^(vendedor|bodeguero|corredor|administrador|boss)$")
+    role: str = Field(..., pattern="^(seller|bodeguero|corredor|administrador|boss)$")
     location_id: Optional[int] = None
     
     class Config:
@@ -97,7 +97,7 @@ class UserCreateRequest(BaseModel):
                 "password": "password123",
                 "first_name": "María",
                 "last_name": "García",
-                "role": "vendedor",
+                "role": "seller",
                 "location_id": 1
             }
         }

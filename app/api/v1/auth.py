@@ -184,7 +184,7 @@ async def check_permissions(
     """Verificar permisos del usuario actual"""
     
     permissions = {
-        "vendedor": ["scan", "sell", "expenses", "transfers"],
+        "seller": ["scan", "sell", "expenses", "transfers"],
         "bodeguero": ["inventory", "transfers", "warehouse"],
         "corredor": ["transport", "deliveries"],
         "administrador": ["all_operations", "user_management"],
@@ -202,7 +202,7 @@ async def check_permissions(
         },
         "permissions": user_permissions,
         "can_access": {
-            "sales_module": current_user.role in ["vendedor", "administrador", "boss"],
+            "sales_module": current_user.role in ["seller", "administrador", "boss"],
             "warehouse_module": current_user.role in ["bodeguero", "administrador", "boss"],
             "logistics_module": current_user.role in ["corredor", "administrador", "boss"],
             "admin_panel": current_user.role in ["administrador", "boss"],

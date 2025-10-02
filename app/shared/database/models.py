@@ -49,7 +49,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     first_name = Column(String(255), nullable=False)
     last_name = Column(String(255), nullable=False)
-    role = Column(String(50), default='vendedor', nullable=False)  # ✅ CORREGIDO: 'vendedor'
+    role = Column(String(50), default='seller', nullable=False)  # ✅ CORREGIDO: 'vendedor'
     location_id = Column(Integer, ForeignKey("locations.id"))
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.current_timestamp())

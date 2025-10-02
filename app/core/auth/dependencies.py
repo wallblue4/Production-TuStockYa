@@ -66,7 +66,7 @@ def require_roles(allowed_roles: List[str]):
     return role_checker
 
 # Dependencies específicas por rol
-def get_seller_user(current_user: User = Depends(require_roles(["vendedor", "administrador", "boss"]))):
+def get_seller_user(current_user: User = Depends(require_roles(["seller", "administrador", "boss"]))):
     """Dependency para vendedores"""
     return current_user
 
@@ -106,7 +106,7 @@ def can_manage_user(current_user: User, target_user: User) -> bool:
     
     # Administrador puede gestionar vendedores, bodegueros y corredores
     if current_user.role == "administrador":
-        return target_user.role in ["vendedor", "bodeguero", "corredor"]
+        return target_user.role in ["seller", "bodeguero", "corredor"]
     
     # Otros roles no pueden gestionar usuarios
     return False

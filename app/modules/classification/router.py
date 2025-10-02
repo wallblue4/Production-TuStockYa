@@ -13,7 +13,7 @@ router = APIRouter()
 async def scan_product(
     image: UploadFile = File(..., description="Imagen del producto a escanear"),
     include_transfer_options: bool = Query(True, description="Incluir opciones de transferencia"),
-    current_user = Depends(require_roles(["vendedor", "administrador", "boss"])),
+    current_user = Depends(require_roles(["seller", "administrador", "boss"])),
     db: Session = Depends(get_db)
 ):
     """
