@@ -1,9 +1,10 @@
 # app/modules/vendor/repository.py
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, func, text
+from sqlalchemy import and_, func, text ,case
 from typing import List, Dict, Any
 from datetime import date, datetime
 from decimal import Decimal
+
 
 from app.shared.database.models import (
     Sale, SalePayment, Expense, TransferRequest, DiscountRequest, 
@@ -23,7 +24,7 @@ class VendorRepository:
             func.count(Sale.id).label('total_sales'),
             func.coalesce(
                 func.sum(
-                    func.case(
+                    case(
                         (Sale.confirmed == True, Sale.total_amount),
                         else_=0
                     )
@@ -31,14 +32,14 @@ class VendorRepository:
             ).label('confirmed_amount'),
             func.coalesce(
                 func.sum(
-                    func.case(
+                    case(
                         (and_(Sale.confirmed == False, Sale.requires_confirmation == True), Sale.total_amount),
                         else_=0
                     )
                 ), 0
             ).label('pending_amount'),
             func.count(
-                func.case(
+                case(
                     (and_(Sale.confirmed == False, Sale.requires_confirmation == True), 1)
                 )
             ).label('pending_confirmations')
@@ -106,13 +107,13 @@ class VendorRepository:
         """Obtener estadísticas de solicitudes de transferencia - igual que backend antiguo"""
         result = self.db.query(
             func.count(
-                func.case((TransferRequest.status == 'pending', 1))
+                case((TransferRequest.status == 'pending', 1))
             ).label('pending'),
             func.count(
-                func.case((TransferRequest.status == 'in_transit', 1))
+                case((TransferRequest.status == 'in_transit', 1))
             ).label('in_transit'),
             func.count(
-                func.case((TransferRequest.status == 'delivered', 1))
+                case((TransferRequest.status == 'delivered', 1))
             ).label('delivered')
         ).filter(TransferRequest.requester_id == user_id).first()
         
@@ -126,13 +127,13 @@ class VendorRepository:
         """Obtener estadísticas de solicitudes de descuento - igual que backend antiguo"""
         result = self.db.query(
             func.count(
-                func.case((DiscountRequest.status == 'pending', 1))
+                case((DiscountRequest.status == 'pending', 1))
             ).label('pending'),
             func.count(
-                func.case((DiscountRequest.status == 'approved', 1))
+                case((DiscountRequest.status == 'approved', 1))
             ).label('approved'),
             func.count(
-                func.case((DiscountRequest.status == 'rejected', 1))
+                case((DiscountRequest.status == 'rejected', 1))
             ).label('rejected')
         ).filter(DiscountRequest.seller_id == user_id).first()
         

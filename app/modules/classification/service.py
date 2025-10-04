@@ -1,13 +1,13 @@
 # app/modules/classification/service.py
 import httpx
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.orm import Session
 
 from .repository import ClassificationRepository
-from .schemas import ScanResponse, ProductMatch, ScanResults
+from .schemas import ProductMatch
 
 class ClassificationService:
     def __init__(self, db: Session):
@@ -15,7 +15,12 @@ class ClassificationService:
         self.repository = ClassificationRepository(db)
         self.microservice_url = "https://sneaker-api-v2.onrender.com"
     
-    async def scan_product(self, image: UploadFile, current_user: Any, include_transfer_options: bool = True) -> Dict[str, Any]:
+    async def scan_product(
+        self, 
+        image: UploadFile, 
+        current_user: Any, 
+        include_transfer_options: bool = True
+    ) -> Dict[str, Any]:
         """Procesar escaneo de producto con IA"""
         start_time = datetime.now()
         
@@ -80,7 +85,7 @@ class ClassificationService:
                 }
             )
     
-    async def _call_classification_microservice(self, image_content: bytes) -> Dict[str, Any]:
+    async def _call_classification_microservice(self, image_content: bytes) -> Optional[Dict[str, Any]]:
         """Llamar al microservicio de clasificación"""
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -100,7 +105,12 @@ class ClassificationService:
             print(f"Error calling microservice: {e}")
             return None
     
-    async def _process_classification_results(self, classification_result: Dict, current_user: Any, include_transfer_options: bool) -> Dict[str, Any]:
+    async def _process_classification_results(
+        self, 
+        classification_result: Dict, 
+        current_user: Any, 
+        include_transfer_options: bool
+    ) -> Dict[str, Any]:
         """Procesar resultados de clasificación y agregar información de inventario"""
         results = classification_result.get('results', [])
         processed_matches = []
@@ -117,6 +127,7 @@ class ClassificationService:
                     product['id'], f"Local #{current_user.location_id}"
                 )
                 
+                # Crear objeto ProductMatch para validación
                 match = ProductMatch(
                     rank=rank,
                     similarity_score=result.get('similarity_score', 0.0),
@@ -133,8 +144,8 @@ class ClassificationService:
                     availability=self._format_availability(availability, include_transfer_options),
                     locations=availability,
                     pricing={
-                        "unit_price": product['unit_price'],
-                        "box_price": product['box_price'],
+                        "unit_price": float(product['unit_price']) if product['unit_price'] else 0.0,
+                        "box_price": float(product['box_price']) if product['box_price'] else 0.0,
                         "has_pricing": True
                     },
                     classification_source="microservice",
@@ -148,7 +159,9 @@ class ClassificationService:
                     original_db_id=product['id'],
                     image_path=product['image_url'] or ""
                 )
-                processed_matches.append(match)
+                
+                # Convertir a diccionario inmediatamente
+                processed_matches.append(match.model_dump())
         
         return {
             "best_match": processed_matches[0] if processed_matches else None,
@@ -164,7 +177,11 @@ class ClassificationService:
             "total_matches_found": 0
         }
     
-    def _format_availability(self, availability: Dict, include_transfer_options: bool) -> Dict[str, Any]:
+    def _format_availability(
+        self, 
+        availability: Dict, 
+        include_transfer_options: bool
+    ) -> Dict[str, Any]:
         """Formatear información de disponibilidad"""
         current_stock = sum(item['quantity'] for item in availability['current_location'])
         other_stock = sum(item['quantity'] for item in availability['other_locations'])
@@ -181,20 +198,31 @@ class ClassificationService:
                 },
                 "total_system": {
                     "total_stock": current_stock + other_stock,
-                    "total_locations": len(set(item['location'] for item in availability['other_locations'])) + (1 if current_stock > 0 else 0)
+                    "total_locations": len(set(
+                        item['location'] for item in availability['other_locations']
+                    )) + (1 if current_stock > 0 else 0)
                 }
             },
-            "recommended_action": "Venta directa" if current_stock > 0 else ("Solicitar transferencia" if other_stock > 0 else "Producto no disponible"),
+            "recommended_action": (
+                "Venta directa" if current_stock > 0 
+                else ("Solicitar transferencia" if other_stock > 0 
+                      else "Producto no disponible")
+            ),
             "can_sell_now": current_stock > 0,
             "can_request_transfer": other_stock > 0 and include_transfer_options
         }
     
     def _get_product_suggestions(self, product: Dict) -> Dict[str, Any]:
         """Obtener sugerencias para el producto"""
+        similar_products = self.repository.search_similar_products(
+            product['brand'], 
+            product['model']
+        )
+        
         return {
             "can_add_to_inventory": True,
             "can_search_suppliers": False,
-            "similar_products_available": len(self.repository.search_similar_products(product['brand'], product['model'])) > 0
+            "similar_products_available": len(similar_products) > 0
         }
     
     def _calculate_availability_summary(self, results: Dict) -> Dict[str, Any]:
@@ -209,8 +237,12 @@ class ClassificationService:
                 "classification_successful": False
             }
         
-        locally_available = 1 if results['best_match']['availability']['can_sell_now'] else 0
-        transfer_available = 1 if results['best_match']['availability']['can_request_transfer'] else 0
+        # Acceso directo a diccionario (ya convertido con model_dump())
+        best_match = results['best_match']
+        availability = best_match.get('availability', {})
+        
+        locally_available = 1 if availability.get('can_sell_now', False) else 0
+        transfer_available = 1 if availability.get('can_request_transfer', False) else 0
         
         return {
             "products_available_locally": locally_available,
