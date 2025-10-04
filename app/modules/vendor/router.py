@@ -11,7 +11,7 @@ router = APIRouter()
 
 @router.get("/dashboard", response_model=VendorDashboardResponse)
 async def get_vendor_dashboard(
-    current_user = Depends(require_roles(["vendedor", "administrador", "boss"])),
+    current_user = Depends(require_roles(["seller", "admin", "boss"])),
     db: Session = Depends(get_db)
 ):
     """
@@ -42,7 +42,7 @@ async def get_vendor_dashboard(
 
 @router.get("/pending-transfers", response_model=TransferSummaryResponse)
 async def get_vendor_pending_transfers(
-    current_user = Depends(require_roles(["vendedor", "administrador", "boss"])),
+    current_user = Depends(require_roles(["seller", "admin", "boss"])),
     db: Session = Depends(get_db)
 ):
     """
@@ -59,7 +59,7 @@ async def get_vendor_pending_transfers(
 
 @router.get("/completed-transfers", response_model=CompletedTransfersResponse)
 async def get_vendor_completed_transfers(
-    current_user = Depends(require_roles(["vendedor", "administrador", "boss"])),
+    current_user = Depends(require_roles(["seller", "admin", "boss"])),
     db: Session = Depends(get_db)
 ):
     """
@@ -80,7 +80,7 @@ async def confirm_reception(
     received_quantity: int = Query(..., description="Cantidad recibida"),
     condition_ok: bool = Query(..., description="Condición del producto OK"),
     notes: str = Query("", description="Notas de recepción"),
-    current_user = Depends(require_roles(["vendedor", "administrador", "boss"])),
+    current_user = Depends(require_roles(["seller", "admin", "boss"])),
     db: Session = Depends(get_db)
 ):
     """
