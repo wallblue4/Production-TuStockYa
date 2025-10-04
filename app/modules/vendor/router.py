@@ -11,7 +11,7 @@ router = APIRouter()
 
 @router.get("/dashboard", response_model=VendorDashboardResponse)
 async def get_vendor_dashboard(
-    current_user = Depends(require_roles(["vendedor", "administrador", "boss"])),
+    current_user = Depends(require_roles(["seller", "administrador", "boss"])),
     db: Session = Depends(get_db)
 ):
     """
