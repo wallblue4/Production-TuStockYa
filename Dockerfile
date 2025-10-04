@@ -15,7 +15,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
-    curl \
+    python3-dev \
+    libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Crear directorio de trabajo
@@ -23,7 +24,7 @@ WORKDIR /app
 
 # Copiar requirements primero (para cache de Docker)
 COPY requirements/ requirements/
-RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir bcrypt==4.0.1
 RUN pip install --no-cache-dir -r requirements/base.txt
 
 # Copiar código de la aplicación

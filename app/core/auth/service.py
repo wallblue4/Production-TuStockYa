@@ -13,12 +13,20 @@ class AuthService:
     @staticmethod
     def verify_password(plain_password: str, hashed_password: str) -> bool:
         """Verificar contraseña"""
-        return pwd_context.verify(plain_password, hashed_password)
+        try:
+            # Ensure password is UTF-8 encoded and truncated if needed
+            encoded_password = plain_password.encode('utf-8')[:72].decode('utf-8')
+            return pwd_context.verify(encoded_password, hashed_password)
+        except Exception as e:
+            print(f"Password verification error: {str(e)}")
+            return False
     
     @staticmethod
     def get_password_hash(password: str) -> str:
         """Generar hash de contraseña"""
-        return pwd_context.hash(password)
+        # Ensure password is UTF-8 encoded and truncated if needed
+        encoded_password = password.encode('utf-8')[:72].decode('utf-8')
+        return pwd_context.hash(encoded_password)
     
     @staticmethod
     def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
